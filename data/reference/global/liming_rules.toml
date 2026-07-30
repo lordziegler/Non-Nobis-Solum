@@ -3,9 +3,12 @@
 # (Kamprath's rule of thumb for acid tropical soils).
 # target_base_saturation_pct: the SB2 this profile aims for when raising
 # base saturation by liming.
+# region = "any": this file is already scoped to one reference profile,
+# so its rules answer for a lot whatever that lot's region column says.
+# A row naming a specific region still wins over this one.
 
 [[rules]]
-region = "global"
+region = "any"
 al_factor = 1.5
 target_base_saturation_pct = 80.0
 source = "Kamprath_1970_tropical_soils_typical"

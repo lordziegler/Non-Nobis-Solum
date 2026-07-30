@@ -2,6 +2,13 @@
 //! constants for the liming formulas (Al-toxicity factor, target base
 //! saturation). Same TOML-constants-in-memory style as
 //! `StaticConversionFactorsRepo`.
+//!
+//! A lot's `region` and the active `--profile` are independent knobs, and
+//! a file that lives inside a profile directory is already scoped to that
+//! profile. So a rule row may carry the sentinel region `"any"`, meaning
+//! "whatever region the lot claims, under this profile" — exact region
+//! first, sentinel second, the same shape `CsvCriticalLevelsRepo` and
+//! `YamlEfficiencyRulesRepo` use.
 
 use std::path::Path;
 
@@ -9,6 +16,8 @@ use serde::Deserialize;
 
 use crate::core::domain::DomainError;
 use crate::core::ports::LimingRulesRepository;
+
+const ANY_REGION: &str = "any";
 
 #[derive(Debug, Deserialize)]
 struct LimingRulesRow {
@@ -40,6 +49,7 @@ impl StaticLimingRulesRepo {
         self.rules
             .iter()
             .find(|r| r.region == region)
+            .or_else(|| self.rules.iter().find(|r| r.region == ANY_REGION))
             .ok_or_else(|| DomainError::NotFound(format!("no liming rules for region={region}")))
     }
 }
@@ -51,5 +61,43 @@ impl LimingRulesRepository for StaticLimingRulesRepo {
 
     fn target_base_saturation_pct(&self, region: &str) -> Result<f64, DomainError> {
         self.row_for(region).map(|r| r.target_base_saturation_pct)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RULES: &str = r#"
+[[rules]]
+region = "andina_colombia"
+al_factor = 2.0
+target_base_saturation_pct = 70.0
+source = "test"
+
+[[rules]]
+region = "any"
+al_factor = 1.5
+target_base_saturation_pct = 80.0
+source = "test"
+"#;
+
+    fn repo() -> StaticLimingRulesRepo {
+        let file: LimingRulesFile = toml::from_str(RULES).expect("test fixture parses");
+        StaticLimingRulesRepo { rules: file.rules }
+    }
+
+    #[test]
+    fn a_named_region_wins_over_the_sentinel() {
+        assert_eq!(repo().al_factor("andina_colombia").unwrap(), 2.0);
+    }
+
+    /// Used to be a hard failure — `LimingRulesRepository` propagates,
+    /// so `--profile global` on a lot whose region column says otherwise
+    /// killed the whole plan instead of the liming section.
+    #[test]
+    fn an_unnamed_region_falls_back_to_the_sentinel() {
+        assert_eq!(repo().al_factor("somewhere_else").unwrap(), 1.5);
+        assert_eq!(repo().target_base_saturation_pct("somewhere_else").unwrap(), 80.0);
     }
 }

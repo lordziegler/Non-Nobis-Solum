@@ -8,6 +8,12 @@
 //! duplicated per USDA texture class. A row with an exact texture match
 //! wins if one is ever added for a specific class; otherwise lookup falls
 //! back to `"any"`.
+//!
+//! `region` takes the same sentinel, for a different reason: the file
+//! already lives inside a profile directory, and a lot's `region` column
+//! is an independent knob from `--profile`. A `"any"` region row means
+//! "whatever region the lot claims, under this profile"; a row naming a
+//! region still wins over it.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +22,7 @@ use serde::Deserialize;
 use crate::core::domain::{CriticalLevel, DomainError, Texture};
 use crate::core::ports::CriticalLevelsRepository;
 
-const ANY_TEXTURE: &str = "any";
+const ANY: &str = "any";
 
 #[derive(Debug, Deserialize)]
 struct CriticalLevelRow {
@@ -61,13 +67,13 @@ impl CriticalLevelsRepository for CsvCriticalLevelsRepo {
         let mut any_texture_fallback: Option<CriticalLevelRow> = None;
         for row in reader.deserialize::<CriticalLevelRow>() {
             let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
-            if row.nutrient_id != nutrient_id || row.region != region {
+            if row.nutrient_id != nutrient_id || (row.region != region && row.region != ANY) {
                 continue;
             }
             if row.texture == texture_str {
                 return Ok(row.into());
             }
-            if row.texture == ANY_TEXTURE {
+            if row.texture == ANY {
                 any_texture_fallback = Some(row);
             }
         }
@@ -92,6 +98,19 @@ mod tests {
 
         assert_eq!(level.low_threshold, 10.0);
         assert_eq!(level.medium_threshold, 20.0);
+    }
+
+    /// A lot's `region` and the active `--profile` are independent knobs:
+    /// both shipped lots claim `andina_colombia` whatever profile is
+    /// chosen, which used to silently drop every soil status under
+    /// `--profile global`.
+    #[test]
+    fn a_region_the_profile_does_not_name_falls_back_to_the_sentinel() {
+        let repo = CsvCriticalLevelsRepo::new("data/reference/global/critical_levels.csv");
+
+        let level = repo.get_critical_level("P", &Texture::Loam, "andina_colombia").unwrap();
+
+        assert_eq!(level.low_threshold, 10.0);
     }
 
     #[test]
