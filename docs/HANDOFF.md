@@ -2,20 +2,23 @@
 
 A hexagonal (ports & adapters) Rust CLI at the repo root (`Cargo.toml`,
 `src/`, `data/`), package name `non_nobis_solum`, built on top of the
-`Non-Nobis-Solum-Py` prototype. Three sessions so far: (1) the initial
-Rust port, (2) folding Bertsch et al.'s nutrient-removal/soil-standard
-tables into the reference data, (3) integrating a 500-product Colombian
-fertilizer vademecum.
+`Non-Nobis-Solum-Py` prototype, with a second front-end (`nns-tui`).
+Eight sessions so far: (1) the initial Rust port, (2) Bertsch et al.'s
+nutrient-removal/soil-standard tables, (3) a 500-product Colombian
+fertilizer vademecum, (4) N from organic matter, (5) the TUI, (6) liming,
+(7) the NASA POWER agroclimatic adapter, (8) the four blockers of
+`docs/BLOCKERS-AND-ROADMAP.md` — including the first write path.
 
 ## Status
 
-- `cargo build`: compiles clean except expected `dead_code` warnings (see
-  "Known gaps").
-- `cargo test`: 5/5 passing — pure domain math in
+- `cargo build`: zero warnings (the old `dead_code` ones went away in
+  session 5, when `core`/`infra` moved into a library).
+- `cargo test`: 69/69 as of session 8 (5/5 when this section was
+  written) — pure domain math in
   `src/core/domain/services.rs`, pinned against the prototype's formulas
   with literal inputs (not tied to any reference-data row, so data changes
   never break these).
-- CLI verified end-to-end across all three sessions:
+- CLI verified end-to-end every session:
   `cargo run -- crops --profile global`,
   `cargo run -- plan --lot LOT-001 --crop corn --profile andina_colombia`,
   `cargo run -- inspect --lot LOT-002 --crop coffee --profile andina_colombia`,
@@ -36,7 +39,8 @@ data/reference/global/            crops.csv + conversion_factors.toml (shared by
 data/reference/andina_colombia/   nutrient_removal.csv, critical_levels.csv, and its own
                                    fertilizer_sources.csv (500-product Colombian vademecum,
                                    session 3 — overrides global's for this profile)
-data/curated/   two example lots (LOT-001, LOT-002) with soil tests + field context
+data/curated/   two example lots (LOT-001, LOT-002) with soil tests + field context;
+                the only directory the app writes to (session 8, append-only)
 docs/rust-architecture.md   full architecture write-up, data layout, and how to
                             add a new reference profile
 assets/         literature source files these CSVs were transcribed from
@@ -49,11 +53,10 @@ sessions 2 and 3).
 
 ## Known gaps
 
-- **What blocks real-world use is audited in `docs/BLOCKERS-AND-ROADMAP.md`**
-  (session 7): no write path anywhere, the TUI crop selector failing for
-  64 of 66 crops, the efficiency grid covering 4 of 48 texture ×
-  irrigation combinations, and the `region`/`--profile` collision — plus
-  a phased plan. The gaps listed below are the narrower ones.
+- **`docs/BLOCKERS-AND-ROADMAP.md`** audited what blocked real-world use
+  (session 7) and records what session 8 fixed: all four blockers are
+  closed, and the document now carries the list of numbers an agronomist
+  still owes this repo. The gaps listed below are the narrower ones.
 - Only N/P/K/S/Ca/Mg are planned; micronutrient (`Fe`/`Mn`/`Zn`/`Cu`/`B`/`Mo`)
   enum variants exist and now have real reference data (critical levels
   since session 2, fertilizer composition since session 3) but aren't
@@ -63,12 +66,12 @@ sessions 2 and 3).
   real literature values. `coffee`, `cassava`, `bean`, `pasture` still
   illustrative (no confident crosswalk found — see checklist).
 - `tui_adapter` added in session 5 (`nns-tui` binary); `InspectScenario`
-  still has no input port, so the TUI calls its inherent method.
+  got its `InspectScenarioPort` in session 8.
 - Several entities declared per the original spec
   (`SoilSample`, `NutrientDemand`, `Availability`, `DemandType`,
   `CropCatalogRepository::get_crop`, `FertilizerSourceRepository::get_source`)
-  aren't exercised by the single demo use case yet — hence the
-  `dead_code` warnings on `cargo build`. Harmless, not a bug.
+  still aren't exercised by any use case. Harmless, not a bug — and no
+  longer a warning, since they are `pub` in a library.
 - `Nutrient` enum has no `Co` (cobalt) variant — the one vademecum product
   that needed it (`Sulfato de cobalto`) couldn't be represented at all.
 
@@ -402,6 +405,144 @@ interleaved edits to the five files both sessions needed; nothing was
 lost, and the climate work then built on top of the finished liming
 constructor.
 
+## Session 8 — the four blockers of `BLOCKERS-AND-ROADMAP.md`
+
+Worked the five phases of that document in order. Every blocker was
+reproduced before the fix and re-run after. The tree was committed as-is
+first (`Checkpoint: uncommitted work from sessions 2-7`) on branch
+`session8-blockers`, so sessions 2-7 are separable from this work;
+`target/` was untracked at the same time (`.gitignore` already listed it).
+
+`cargo test`: 45 → **69**, `cargo build`: still zero warnings.
+
+### Phase 1 — the efficiency grid answers for any lot
+
+`efficiency_rules.yaml` covered 4 of 48 texture × irrigation
+combinations, and `get_efficiency_range` hard-propagates, so a lot with a
+`sandy_loam` texture or `sprinkler` irrigation had no plan at all.
+
+`YamlEfficiencyRulesRepo` now mirrors `CsvCriticalLevelsRepo`: exact row
+first, sentinel `("any", "any")` row second. Six sentinel rows per
+profile, tagged
+`source: documented_fallback_NOT_literature_envelope_of_covered_rows`,
+each range being the envelope (lowest min, highest max) of that
+nutrient's four curated rows. **No efficiency value was invented** — the
+envelope is a mechanical derivation from data already in the file, its
+midpoint equals the average of the covered combinations, and its width
+states how little is known. The session-2 checklist item that called an
+`"any"` fallback "scientifically dishonest" is answered by tagging the
+provenance instead of laundering it: an exact row always wins, so real
+per-class data can land one row at a time with no code change.
+
+### Phase 2 — yield goal in the TUI
+
+The Crops screen offered 66 crops and passed `yield_override: None`, so
+the 64 without a row in `yield_targets.csv` errored on the first plan.
+Picking a crop now checks the curated rows already in memory and, when
+there is no goal for that (lot, crop), asks for one: digits and a single
+separator only, refused unless it parses to a number greater than zero.
+Changing lot or crop clears it, so a goal can never leak into a scenario
+it wasn't typed for. No `core` changes.
+
+### Phase 3 — the write path (first write in the project's history)
+
+- **`CuratedDataWriter`** output port, exactly the three methods the
+  roadmap specified. Append-only by design; editing an existing row is a
+  read-modify-rename contract that nothing has asked for yet.
+- **`CsvCuratedWriter`**: `OpenOptions::append` + `has_headers(false)` +
+  `csv::Writer`, which quotes any field containing a comma, a quote or a
+  newline. A test writes a region called `Nariño, Colombia` and reads the
+  file back through the production readers — a previous session corrupted
+  the curated CSVs by hand-formatting exactly this case. `field_context.csv`
+  rows are written with an empty trailing `coordinates_note`: the app
+  knows nothing about a coordinate's provenance, and a short row would
+  make the whole file unreadable to `csv::Reader`.
+- **`RegisterLot`** use case + `RegisterLotPort`. Every field arrives as
+  raw text so that parsing and validation happen in exactly one place:
+  texture and irrigation must parse, numbers must be finite and positive,
+  pH and organic matter must be inside their definitional ranges,
+  coordinates inside theirs, crop and yield goal are all-or-nothing,
+  sample depths must not be inverted, a sample needs an existing lot, and
+  a duplicate `field_id` is refused **before** anything is written (all
+  curated readers stop at the first match, so a duplicate would shadow
+  the original on every read).
+- **`ListLots`** use case + `ListLotsPort`, reading `field_context.csv`
+  rather than `yield_targets.csv`: a lot registered without a planning
+  row is still a lot. This retired `bootstrap::App::lots`/`LotRow`, the
+  last place a front-end read a curated file through the composition root.
+- **TUI**: "New lot" and "New sample" forms (module column, mnemonics
+  `n`/`s`), a labelled-field list with a save row; values stay text all
+  the way to the use case, and a rejection leaves the form open showing
+  the port's own message. `Texture::ALL`/`IrrigationSystem::ALL` were
+  added to the domain so the form's accepted-values hint can't drift from
+  `from_str`.
+- Fixed on the way: `reload()` left a stale error flag set, which
+  suppressed the success message of whatever triggered the reload.
+
+### Phase 4 — `region` vs `--profile`
+
+`field_context.csv` hardcodes `region=andina_colombia` for both lots
+whatever `--profile` says; `LimingRulesRepository` propagated the
+resulting `NotFound` (hard fail) and `CriticalLevelsRepository` swallowed
+it (every soil status silently `-`).
+
+A reference file already lives inside a profile directory, so its rows
+are scoped to that profile whatever a lot claims. Both repositories now
+accept the sentinel region `"any"` — a row naming a region still wins —
+and the shipped `liming_rules.toml` / `critical_levels.csv` rows are
+relabelled to it. **No threshold value changed, only the lookup key.**
+`plan --lot LOT-002 --crop coffee --profile global` now produces a full
+plan including the lime recommendation, and soil status resolves under
+`--profile global`.
+
+### Phase 5 — parity and polish
+
+- **Both `unwrap()` calls gone.** `best_source_for` and
+  `best_liming_material_for` share `highest_rated`, which drops
+  non-positive *and* NaN ratings (`> 0.0` is false for NaN) before
+  ordering with `total_cmp`. No `unwrap()` outside `#[cfg(test)]` remains.
+- **`InspectScenarioPort`** added; the TUI and CLI stop calling an
+  inherent method.
+- **Climate in the TUI.** Not a wiring change on its own — the fetch
+  blocks up to 10 s and the render loop is single-threaded — so:
+  `CachedAgroclimaticRepo` now holds a `Send + Sync` provider and exposes
+  `cached()`; a new `PrewarmedAgroclimaticRepo` is a non-blocking view
+  over a shared `Arc` of it, reporting a miss as
+  `ExternalServiceUnavailable` (which the use case already degrades on);
+  `bootstrap::build_climate_cache` hands the TUI that `Arc`; the TUI
+  starts one background fetch per lot per session and plans against the
+  prewarmed view. The plan screen states which regime produced its N
+  numbers, like the CLI already did. Tests construct the TUI with no
+  cache, so the suite never opens a socket.
+- **Not done, deliberately:** plan export and persisted TUI settings.
+  Both are new IO surfaces that deserve their own port decision rather
+  than a bolt-on at the end of a session.
+
+### Verified
+
+- `cargo build` zero warnings; `cargo test` 69/69.
+- `plan --lot LOT-002 --crop corn --profile andina_colombia --yield-value 8
+  --yield-unit t_ha --no-climate` → full plan, exit 0. **Without**
+  `--yield-value` it still errors with `no yield target for
+  field_id=LOT-002 crop_id=corn`, which is correct: the goal has to come
+  from somewhere, and inventing one is exactly what this project must not
+  do. `--yield-value` on the CLI and the Crops-screen prompt in the TUI
+  are the two ways to supply it.
+- `plan --lot LOT-002 --crop coffee --profile global --no-climate` → full
+  plan with liming, exit 0 (was: `no liming rules for
+  region=andina_colombia`).
+- A lot with `silty_clay` / `gravity` (outside the curated grid) plans
+  through both the CLI (`--data-dir` copy of `data/`) and the TUI write
+  path (test `a_lot_curated_in_the_tui_can_be_sampled_and_planned`, which
+  registers `LOT-900` as `silty_clay`/`gravity`, adds a P test and plans
+  `wheat` on a typed yield goal).
+- Climate still degrades: with `HTTPS_PROXY` pointed at a closed port,
+  `plan` prints exactly one stderr line and exits 0 on baseline
+  constants. With the network up, the same lot gives factor 0.0102 at
+  T=13.2 °C — the session-7 numbers, unchanged.
+- The TUI was **not** launched by hand (it takes over the tty); its own
+  test suite renders all seven screens at 80x24 and 130x40.
+
 ## Checklist — data still to gather / implement
 
 From session 7 (agroclimatic adapter):
@@ -480,17 +621,22 @@ From session 2 (Tabla 10/11/12):
       `CalculateFertilityPlan`/`InspectScenario` both call
       `get_critical_level(...).ok()`, so an unmatched texture only dropped
       `soil_status` to `None`, it never propagated the `NotFound` up.
-  - [ ] **`efficiency_rules.yaml` has the identical shape of gap but is
-        NOT fixed** — only `loam`/`clay_loam` are populated there too, but
+  - [x] **`efficiency_rules.yaml` had the identical shape of gap** — and
         unlike critical levels its N/P/K ranges genuinely differ between
-        those two textures (e.g. N rainfed: 0.55–0.65 for `loam` vs.
-        0.45–0.55 for `clay_loam`), so an `"any"` fallback would be
-        scientifically dishonest — it needs real per-texture-class
-        efficiency data, not a data-layer trick. Worth noting this one
-        *does* crash: `CalculateFertilityPlan` calls
-        `get_efficiency_range(...)?` (hard-propagates), so any lot with a
-        texture outside `{loam, clay_loam}` still fails `plan` (though not
-        `inspect`, which also uses `.ok()` there).
+        the two populated textures (N rainfed: 0.55–0.65 for `loam` vs.
+        0.45–0.55 for `clay_loam`), so a silent `"any"` fallback would
+        have been dishonest. Session 8 added one anyway, but **tagged**:
+        the sentinel rows carry
+        `source=documented_fallback_NOT_literature_envelope_of_covered_rows`
+        and a header comment saying so, and their ranges are the envelope
+        of the same file's curated rows rather than new numbers. The
+        crash is gone (any texture × irrigation now plans); the data gap
+        is not:
+    - [ ] **Real per-texture-class efficiency data for the 44 uncovered
+          combinations.** An exact row beats the sentinel, so these can
+          be added one at a time with no code change. Until then every
+          lot outside `{loam, clay_loam} × {rainfed, drip}` is planned on
+          a derived envelope, not on literature.
 - [x] **Lime requirement from Al³⁺/CIC + PRNT/material dose** — fixed in
       session 6, see above (`LimingRecommendation`, `LimingRulesRepository`,
       `LimingMaterialRepository`).

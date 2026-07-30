@@ -18,8 +18,8 @@ Strict ports & adapters:
   from the outside world (repositories); `input.rs` is what the outside
   world can ask the domain to do (use cases).
 - `src/core/application` — the use cases: `CalculateFertilityPlan`,
-  `ListSupportedCrops`, `InspectScenario`. They depend only on the port
-  traits, never on a concrete adapter.
+  `ListSupportedCrops`, `InspectScenario`, `ListLots` and `RegisterLot`.
+  They depend only on the port traits, never on a concrete adapter.
 - `src/infra` — concrete adapters (CSV/TOML/YAML readers, the `clap`
   CLI, the `ratatui` TUI, the NASA POWER HTTP client) and `bootstrap.rs`,
   the composition root: the only place that knows about file paths,
@@ -51,6 +51,28 @@ of reading a local file, and it's wired differently because of it:
 The general rule: an adapter that can fail for reasons the user can't fix
 should be optional at the composition root and degrade in the use case,
 not propagate.
+
+A front-end that must not block gets a second wiring of the same adapter:
+`CachedAgroclimaticRepo` is shared as an `Arc` (its provider is
+`Send + Sync`), a background thread fills it, and the render loop reads it
+through `PrewarmedAgroclimaticRepo`, whose cache miss is an
+`ExternalServiceUnavailable` — the degradation path that already existed.
+The CLI, which is allowed to wait, keeps the blocking wiring.
+
+### The write path
+
+`CuratedDataWriter` is the only output port that changes anything on
+disk, and `RegisterLot` the only use case that holds one. Two rules keep
+it boring:
+
+- **Append-only.** Creating a lot, a sample or a planning row is all the
+  write access anything needs today. Editing an existing row is a
+  read-modify-rename contract; it can be added when something asks.
+- **Validation belongs to the use case, not the adapter and not the
+  front-end.** `LotRegistration`/`SoilTestEntry` carry raw text for every
+  field, including numbers, so a CLI, a TUI or an HTTP handler all reach
+  the same parsing and the same range checks. The writer only ever sees
+  domain types that already parsed.
 
 ## Data layout
 
@@ -141,6 +163,9 @@ cargo run -- inspect --lot LOT-002 --crop coffee --profile andina_colombia
 cargo run -- plan --lot LOT-001 --crop corn --no-climate
 ```
 
+New lots and samples are curated from the TUI (`nns-tui`, modules "New
+lot" / "New sample"); the CLI has no write subcommand.
+
 `plan` queries NASA POWER for the lot's coordinates unless `--no-climate`
 is given. It never fails on that account: with no network, no
 coordinates, or the flag set, it prints one stderr warning and falls back
@@ -153,33 +178,34 @@ context row, matching the two sample rows shipped in
 `data/curated/`. `--yield-value`/`--yield-unit` are optional; when
 omitted, the plan falls back to `data/curated/yield_targets.csv`.
 
-## Known simplifications
+## The `"any"` sentinel convention
 
-- `data/curated/field_context.csv`'s `region` column is `andina_colombia`
-  for both shipped lots regardless of the `--profile` flag chosen — a
-  pre-existing mismatch (region and profile are independent knobs).
-  `CriticalLevelsRepository` swallows the resulting `NotFound` with `.ok()`
-  (silently drops `soil_status` to `None`, reproducible today via
-  `cargo run -- plan --lot LOT-001 --crop corn --yield-value 10 --yield-unit t_ha`,
-  which defaults to `--profile global` and shows `Status: -` on every row).
-  `LimingRulesRepository` does **not** swallow it (`?`, hard-propagates,
-  same as `EfficiencyRulesRepository`) — recommended for a lookup the
-  liming math can't meaningfully proceed without — so `--lot LOT-002`
-  (the only curated lot with an Al³⁺ test) under `--profile global`
-  fails outright instead of degrading quietly. Not a regression: this
-  exact combination was never a validated/documented path. Worth fixing
-  before curated data grows past two illustrative lots.
-- `critical_levels.csv` rows use the sentinel texture `"any"` instead of
-  one row per USDA texture class — the literature behind this file
-  (Olsen guidelines, Castro-Gomez 2009 Tabla 12) doesn't differentiate
-  low/medium/high thresholds by texture, so a single `"any"` row covers
-  every texture until real per-texture data exists.
-  `CsvCriticalLevelsRepo::get_critical_level` matches an exact texture
-  first and falls back to `"any"`; `efficiency_rules.yaml` has no such
-  fallback (its N/P/K ranges *do* differ meaningfully between `loam` and
-  `clay_loam`), so a lot with any texture other than those two still
-  fails `plan`/`inspect` — real per-texture-class efficiency data is
-  needed before that file can grow past two rows.
+Three reference tables share one lookup shape: **exact match first,
+sentinel row second**. A row keyed `"any"` means "this value does not
+vary along that axis, as far as the data we have knows", and a row naming
+a specific value always beats it — so real per-class data can be added
+one row at a time without touching code.
+
+- `critical_levels.csv`, `texture: any` — the literature behind the file
+  (Olsen guidelines, Castro-Gomez 2009 Tabla 12) genuinely doesn't
+  differentiate thresholds by texture.
+- `critical_levels.csv` and `liming_rules.toml`, `region: any` — a
+  reference file already lives inside a profile directory, so it answers
+  for whatever region a lot's `field_context.csv` row claims. Without
+  this, `--profile global` on a lot tagged `region=andina_colombia`
+  dropped every `soil_status` to `None` and failed the liming lookup
+  outright.
+- `efficiency_rules.yaml`, `texture: any, irrigation: any` — **the one
+  sentinel that is not a statement about the science.** Its N/P/K ranges
+  do differ between the covered textures; the sentinel exists because 44
+  of the 48 combinations have no data at all, and a lot outside the grid
+  needs *a* plan more than it needs a fabricated coefficient. Those rows
+  are tagged
+  `source: documented_fallback_NOT_literature_envelope_of_covered_rows`
+  and their ranges are the envelope of the same file's curated rows, not
+  new numbers. Treat any plan that lands on them as provisional.
+
+## Known simplifications
 - Only the six macronutrients (N, P, K, S, Ca, Mg) are planned;
   micronutrient enum variants exist but aren't wired into a use case yet.
 - `CalculateFertilityPlan` picks, per nutrient, the single fertilizer
@@ -195,8 +221,14 @@ omitted, the plan falls back to `data/curated/yield_targets.csv`.
   penalty each), and reference ET0 is derived by Hargreaves rather than
   Penman-Monteith because NASA POWER exposes no ET0 parameter at all —
   see `docs/HANDOFF.md`, session 7.
-- Climate is wired into the CLI only. The TUI passes `None`: the fetch
-  blocks with a 10 s timeout and the render loop is single-threaded.
+- The TUI's climate is best-effort *in time* as well as in availability:
+  the first plan for a lot usually lands before the background fetch
+  does, and runs on baseline constants. Asking again a moment later picks
+  the climatology up. Both states are labelled on screen.
+- Nothing is exported: no plan file, no plan history, and TUI settings
+  (language, profile) still reset on exit.
+- The write path only appends. There is no way to correct a curated row
+  from the app.
 
 ## Tests
 
