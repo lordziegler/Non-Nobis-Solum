@@ -22,6 +22,12 @@ struct FieldContextRow {
     bulk_density_kg_dm3: f64,
     arable_depth_m: f64,
     region: String,
+    /// Optional so a curated file predating the climate work still loads:
+    /// a lot with no coordinates gets no climate enrichment.
+    #[serde(default)]
+    latitude: Option<f64>,
+    #[serde(default)]
+    longitude: Option<f64>,
 }
 
 pub struct CsvFieldContextRepo {
@@ -55,6 +61,8 @@ impl FieldContextRepository for CsvFieldContextRepo {
                 bulk_density_kg_dm3: row.bulk_density_kg_dm3,
                 arable_depth_m: row.arable_depth_m,
                 region: row.region,
+                latitude: row.latitude,
+                longitude: row.longitude,
             });
         }
 

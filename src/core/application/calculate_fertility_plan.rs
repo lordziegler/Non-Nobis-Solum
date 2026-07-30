@@ -1,19 +1,13 @@
 use super::scenario::FertilityScenario;
 use crate::core::domain::{
-    services, DomainError, FertilityPlan, FertilizerDose, LimingDose, LimingRecommendation, Nutrient, NutrientPlanEntry,
-    SoilTest,
+    services, AnnualClimatology, DomainError, FertilityPlan, FertilizerDose, FieldContext, LimingDose,
+    LimingRecommendation, Nutrient, NutrientPlanEntry, SoilTest,
 };
 use crate::core::ports::{
-    ConversionFactorsRepository, CriticalLevelsRepository, EfficiencyRulesRepository, FertilityCalculatorPort,
-    FertilizerSourceRepository, FieldContextRepository, LimingMaterialRepository, LimingRulesRepository,
-    NutrientRemovalRepository, SoilTestRepository, YieldTargetRepository,
+    AgroclimaticRepository, ConversionFactorsRepository, CriticalLevelsRepository, EfficiencyRulesRepository,
+    FertilityCalculatorPort, FertilizerSourceRepository, FieldContextRepository, LimingMaterialRepository,
+    LimingRulesRepository, NutrientRemovalRepository, SoilTestRepository, YieldTargetRepository,
 };
-
-/// Fraction of total soil N assumed to mineralize annually. Matches the
-/// prototype's hardcoded 1.5% (`n.py`); not yet profile/texture-specific.
-// ponytail: single global constant, promote to a per-profile/texture value
-// (like efficiency_rules.yaml) if calibration ever needs it to vary.
-const ANNUAL_MINERALIZATION_FACTOR: f64 = 0.015;
 
 /// The main use case: turns a scenario (field + crop + yield goal) into a
 /// full fertility plan by combining curated scenario data with the
@@ -29,6 +23,10 @@ pub struct CalculateFertilityPlan {
     fertilizer_sources: Box<dyn FertilizerSourceRepository>,
     liming_rules: Box<dyn LimingRulesRepository>,
     liming_materials: Box<dyn LimingMaterialRepository>,
+    /// The one optional dependency: every other repository reads a local
+    /// file and its absence is a bug, but this one crosses a network and
+    /// the plan is required to run without it.
+    agroclimatic: Option<Box<dyn AgroclimaticRepository>>,
 }
 
 impl CalculateFertilityPlan {
@@ -44,6 +42,7 @@ impl CalculateFertilityPlan {
         fertilizer_sources: Box<dyn FertilizerSourceRepository>,
         liming_rules: Box<dyn LimingRulesRepository>,
         liming_materials: Box<dyn LimingMaterialRepository>,
+        agroclimatic: Option<Box<dyn AgroclimaticRepository>>,
     ) -> Self {
         Self {
             soil_tests,
@@ -56,7 +55,20 @@ impl CalculateFertilityPlan {
             fertilizer_sources,
             liming_rules,
             liming_materials,
+            agroclimatic,
         }
+    }
+
+    /// Best-effort climatology for a lot. Returns `None` — never an error
+    /// — when climate is switched off, the lot has no coordinates, or the
+    /// provider is unreachable. Collapsing all three into one `None` is
+    /// deliberate: from the plan's perspective they are the same
+    /// situation, and the caller reports it with a single warning.
+    fn resolve_climate(&self, field_context: &FieldContext) -> Option<AnnualClimatology> {
+        let repo = self.agroclimatic.as_ref()?;
+        let latitude = field_context.latitude?;
+        let longitude = field_context.longitude?;
+        repo.fetch_climatology(latitude, longitude).ok()
     }
 
     fn best_source_for(&self, nutrient: Nutrient, net_kg_ha: f64) -> Result<Option<FertilizerDose>, DomainError> {
@@ -151,6 +163,24 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
 
         let soil_weight = services::soil_weight_kg_ha(field_context.bulk_density_kg_dm3, field_context.arable_depth_m);
 
+        let climate = self.resolve_climate(&field_context);
+
+        // Both climate-derived quantities fall back to "as if there were
+        // no climate at all": the baseline constant and a zero delta.
+        // Note the mineralization factor needs *both* temperature and
+        // precipitation before it will replace the baseline, even under
+        // irrigation where precipitation is then discarded — a partial
+        // climatology is not obviously better than the calibrated default.
+        let mineralization_factor = climate
+            .as_ref()
+            .and_then(|c| Some(services::mineralization_factor(c.mean_temp_c?, c.annual_precip_mm()?, &field_context.irrigation_system)))
+            .unwrap_or(services::BASELINE_MINERALIZATION_FACTOR);
+
+        let efficiency_adjustment = climate
+            .as_ref()
+            .map(|c| services::efficiency_climate_adjustment(c, &field_context.irrigation_system))
+            .unwrap_or_default();
+
         let mut nutrient_results = Vec::with_capacity(Nutrient::MACRONUTRIENTS.len());
         for nutrient in Nutrient::MACRONUTRIENTS {
             let nutrient_id = nutrient.as_str();
@@ -160,11 +190,7 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
                 // N has no soil-test-based path: it's derived from organic
                 // matter, never measured as a raw ppm value (see workflow
                 // reference and the prototype's n.py).
-                services::nitrogen_available_kg_ha(
-                    field_context.organic_matter_percent,
-                    ANNUAL_MINERALIZATION_FACTOR,
-                    soil_weight,
-                )
+                services::nitrogen_available_kg_ha(field_context.organic_matter_percent, mineralization_factor, soil_weight)
             } else {
                 match test {
                     Some(test) => {
@@ -192,6 +218,16 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
                 &field_context.irrigation_system,
                 nutrient_id,
             )?;
+            // Climate can only pull the optimistic end of the range down,
+            // and never below the pessimistic end — a stress signal must
+            // narrow the range, not invert it.
+            let efficiency_max = match nutrient {
+                Nutrient::N => efficiency_max + efficiency_adjustment.n_max_delta,
+                Nutrient::P => efficiency_max + efficiency_adjustment.p_max_delta,
+                Nutrient::K => efficiency_max + efficiency_adjustment.k_max_delta,
+                _ => efficiency_max,
+            }
+            .max(efficiency_min);
             let efficiency_used = (efficiency_min + efficiency_max) / 2.0;
 
             let net_requirement_kg_ha = services::net_requirement_kg_ha(demand_kg_ha, availability_kg_ha, efficiency_used);
@@ -229,6 +265,8 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
             yield_target,
             nutrient_results,
             liming,
+            mineralization_factor,
+            climate,
         })
     }
 }

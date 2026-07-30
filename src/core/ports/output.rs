@@ -12,8 +12,8 @@
 //! scenario.
 
 use crate::core::domain::{
-    Crop, CriticalLevel, DomainError, FertilizerSource, FieldContext, IrrigationSystem, LimingMaterial,
-    RemovalReference, SoilTest, Texture, YieldTarget,
+    AnnualClimatology, Crop, CriticalLevel, DomainError, FertilizerSource, FieldContext, IrrigationSystem,
+    LimingMaterial, RemovalReference, SoilTest, Texture, YieldTarget,
 };
 
 pub trait SoilTestRepository {
@@ -89,4 +89,20 @@ pub trait LimingRulesRepository {
 /// `FertilizerSourceRepository` (see `LimingMaterial`'s doc comment).
 pub trait LimingMaterialRepository {
     fn list_materials(&self) -> Result<Vec<LimingMaterial>, DomainError>;
+}
+
+/// Long-term climatology for a point on the globe.
+///
+/// Deliberately the thinnest possible contract: coordinates in, an
+/// [`AnnualClimatology`] out. It names no provider, no time window and no
+/// parameter codes, so NASA POWER, Open-Meteo or Agromonitoring are all
+/// swappable behind it without `core` noticing. Which variables a given
+/// provider can actually supply is expressed by leaving fields `None`,
+/// not by widening this trait.
+///
+/// Unlike every other repository here this one talks to a network, so
+/// callers must treat `Err` as "degrade", not "fail" — see
+/// `DomainError::ExternalServiceUnavailable`.
+pub trait AgroclimaticRepository {
+    fn fetch_climatology(&self, latitude: f64, longitude: f64) -> Result<AnnualClimatology, DomainError>;
 }

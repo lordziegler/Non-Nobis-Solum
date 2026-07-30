@@ -51,6 +51,10 @@ pub struct ScenarioArgs {
     /// Reference profile to trust for removal coefficients, efficiencies, etc.
     #[arg(long, default_value = "global")]
     pub profile: String,
+    /// Skip the agroclimatic API and plan from the baseline constants.
+    /// Only affects `plan`; `inspect` never queries climate.
+    #[arg(long)]
+    pub no_climate: bool,
 }
 
 #[derive(Args)]
@@ -75,8 +79,9 @@ pub fn run(cli: Cli) -> Result<(), DomainError> {
     match cli.command {
         Command::Plan(args) => {
             let layout = DataLayout::new(&cli.data_dir, &args.profile);
+            let climate = if args.no_climate { None } else { bootstrap::build_agroclimatic_repo() };
             let scenario = args.into_scenario();
-            let use_case = bootstrap::build_calculate_fertility_plan(&layout)?;
+            let use_case = bootstrap::build_calculate_fertility_plan(&layout, climate)?;
             let plan = use_case.calculate(scenario)?;
             print_plan(&plan);
         }
@@ -130,6 +135,8 @@ fn print_plan(plan: &crate::core::domain::FertilityPlan) {
         );
     }
 
+    print_climate(plan);
+
     if let Some(liming) = &plan.liming {
         println!(
             "Liming — base saturation {:.1}% (target {:.0}%); requirement: {:.2} t/ha by Al3+, {:.2} t/ha by base saturation -> recommended {:.2} t/ha",
@@ -143,6 +150,39 @@ fn print_plan(plan: &crate::core::domain::FertilityPlan) {
             Some(dose) => println!("  Material: {:.2} t/ha {}", dose.t_product_per_ha, dose.source_name),
             None => println!("  Material: -"),
         }
+    }
+}
+
+/// Reports which climate-derived values the plan actually used, and emits
+/// the single stderr warning when it ran without any. Every figure here
+/// is labelled `[climate-adjusted]` or `[baseline]` — the mineralization
+/// factor alone can move N availability by 3x, so the reader must never
+/// have to guess which regime produced a number.
+fn print_climate(plan: &crate::core::domain::FertilityPlan) {
+    let Some(climate) = &plan.climate else {
+        eprintln!("[climate] NASA POWER unavailable — running without climate enrichment");
+        println!("N mineralization factor: {:.4}  [baseline — no climate data]", plan.mineralization_factor);
+        return;
+    };
+
+    match climate.mean_temp_c {
+        Some(temp) => println!("N mineralization factor: {:.4}  [climate-adjusted, T={temp:.1}°C]", plan.mineralization_factor),
+        // Reachable: the climatology arrived but without a usable T2M, so
+        // the factor fell back to baseline even though climate is present.
+        None => println!("N mineralization factor: {:.4}  [baseline — climatology has no mean temperature]", plan.mineralization_factor),
+    }
+
+    if let Some(solar) = climate.solar_mj_m2_per_day {
+        let index = crate::core::domain::services::rue_index(solar);
+        let label = if index >= 0.8 {
+            "HIGH"
+        } else if index >= 0.5 {
+            "MEDIUM"
+        } else {
+            "LOW"
+        };
+        // Informational only — no dose above was scaled by this.
+        println!("Solar yield potential: {label} (RUE index {index:.2}, {solar:.1} MJ/m²/day)");
     }
 }
 

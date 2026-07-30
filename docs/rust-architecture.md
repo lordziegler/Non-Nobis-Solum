@@ -21,12 +21,36 @@ Strict ports & adapters:
   `ListSupportedCrops`, `InspectScenario`. They depend only on the port
   traits, never on a concrete adapter.
 - `src/infra` — concrete adapters (CSV/TOML/YAML readers, the `clap`
-  CLI) and `bootstrap.rs`, the composition root: the only place that
-  knows about file paths and wires adapters into use cases.
+  CLI, the `ratatui` TUI, the NASA POWER HTTP client) and `bootstrap.rs`,
+  the composition root: the only place that knows about file paths,
+  network endpoints, and how adapters wire into use cases.
 
 Dependency direction is one-way: `infra` depends on `core`, never the
-reverse. A `tui_adapter` can be added later next to `cli_adapter` without
-touching `core` at all — same ports, same use cases, different frontend.
+reverse. `tui_adapter` was added next to `cli_adapter` without touching
+`core` at all — same ports, same use cases, different frontend.
+
+### Optional and remote adapters
+
+`agroclimatic_adapter` is the one adapter that crosses a network instead
+of reading a local file, and it's wired differently because of it:
+
+- `CalculateFertilityPlan` takes it as `Option<Box<dyn
+  AgroclimaticRepository>>`. Every other repository is mandatory — its
+  absence is a bug — but a climate provider that's merely unreachable is
+  an expected Tuesday.
+- The use case collapses "switched off", "lot has no coordinates" and
+  "provider is down" into a single `None`, and falls back to baseline
+  constants. It never returns `Err` because climate failed.
+- `DomainError::ExternalServiceUnavailable` exists to mark errors callers
+  are expected to *degrade* on rather than propagate.
+- The port names no provider, endpoint or parameter code, so a second
+  provider is a new file in `agroclimatic_adapter/` plus one line in
+  `bootstrap.rs`. A provider that can't supply some variable leaves that
+  field `None` rather than widening the trait.
+
+The general rule: an adapter that can fail for reasons the user can't fix
+should be optional at the composition root and degrade in the use case,
+not propagate.
 
 ## Data layout
 
@@ -114,7 +138,14 @@ cargo run -- crops --profile global
 cargo run -- plan --lot LOT-001 --crop corn --profile andina_colombia
 cargo run -- plan --lot LOT-001 --crop corn --yield-value 10 --yield-unit t_ha
 cargo run -- inspect --lot LOT-002 --crop coffee --profile andina_colombia
+cargo run -- plan --lot LOT-001 --crop corn --no-climate
 ```
+
+`plan` queries NASA POWER for the lot's coordinates unless `--no-climate`
+is given. It never fails on that account: with no network, no
+coordinates, or the flag set, it prints one stderr warning and falls back
+to baseline constants. Output labels which regime produced each figure
+(`[climate-adjusted, T=13.2°C]` vs `[baseline — no climate data]`).
 
 `--lot` is used as both the sample ID (for `soil_tests.csv`) and the
 field ID (for `field_context.csv`) — one lot, one composite sample, one
@@ -158,8 +189,14 @@ omitted, the plan falls back to `data/curated/yield_targets.csv`.
   estimates (tagged `source=illustrative_estimate`), not literature
   values like the N/P/K/S rows ported from the prototype — replace them
   with local data before using this for real recommendations.
-- `infra::tui_adapter` doesn't exist yet — the ports and use cases are
-  already frontend-agnostic, so it's a pure addition when needed.
+- Climate enrichment uses a **30-year climatology**, not the season being
+  planned: it characterizes a site, not a year. The three efficiency
+  adjustments are uncalibrated round rules of thumb (one flat 0.05
+  penalty each), and reference ET0 is derived by Hargreaves rather than
+  Penman-Monteith because NASA POWER exposes no ET0 parameter at all —
+  see `docs/HANDOFF.md`, session 7.
+- Climate is wired into the CLI only. The TUI passes `None`: the fetch
+  blocks with a 10 s timeout and the render loop is single-threaded.
 
 ## Tests
 

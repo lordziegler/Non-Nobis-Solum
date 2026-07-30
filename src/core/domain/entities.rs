@@ -76,6 +76,45 @@ pub struct FieldContext {
     pub bulk_density_kg_dm3: f64,
     pub arable_depth_m: f64,
     pub region: String,
+    /// Decimal degrees, WGS84. Optional: a lot with no coordinates simply
+    /// gets no climate enrichment, exactly as if the API were down.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+}
+
+/// A long-term (30-year) climatology reduced to the annual figures the
+/// domain actually consumes, as returned by an `AgroclimaticRepository`.
+///
+/// Every field is `Option` on purpose: a provider may not expose a
+/// variable at all, or may return its missing-data sentinel for a given
+/// grid cell. Each rule that reads this struct is responsible for doing
+/// nothing when its input is absent.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AnnualClimatology {
+    pub mean_temp_c: Option<f64>,
+    /// The *hottest month's* mean daily maximum, not the annual mean of
+    /// the daily maxima — the heat-stress rule asks whether any month
+    /// crosses a threshold, so the reduction has to be a max, not a mean.
+    pub max_temp_c: Option<f64>,
+    /// The coldest month's mean daily minimum, by the same logic.
+    pub min_temp_c: Option<f64>,
+    pub precip_mm_per_day: Option<f64>,
+    pub solar_mj_m2_per_day: Option<f64>,
+    pub humidity_pct: Option<f64>,
+    pub wind_ms: Option<f64>,
+    /// Reference evapotranspiration. See `NasaPowerRepo` for why this is
+    /// derived rather than fetched.
+    pub et0_mm_per_day: Option<f64>,
+}
+
+impl AnnualClimatology {
+    pub fn annual_precip_mm(&self) -> Option<f64> {
+        self.precip_mm_per_day.map(|v| v * 365.0)
+    }
+
+    pub fn annual_et0_mm(&self) -> Option<f64> {
+        self.et0_mm_per_day.map(|v| v * 365.0)
+    }
 }
 
 /// Thresholds used to classify a soil test value as low/medium/high.
@@ -185,4 +224,12 @@ pub struct FertilityPlan {
     pub yield_target: YieldTarget,
     pub nutrient_results: Vec<NutrientPlanEntry>,
     pub liming: Option<LimingRecommendation>,
+    /// The mineralization factor actually used for N this run. Reported
+    /// so the output can state whether it was climate-derived or the
+    /// baseline constant — the two differ by up to 3x.
+    pub mineralization_factor: f64,
+    /// `None` means the plan ran without climate enrichment (no
+    /// coordinates, provider unreachable, or explicitly disabled). Every
+    /// climate-derived figure in the plan is baseline when this is `None`.
+    pub climate: Option<AnnualClimatology>,
 }

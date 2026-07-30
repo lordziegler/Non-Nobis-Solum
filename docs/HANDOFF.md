@@ -49,6 +49,11 @@ sessions 2 and 3).
 
 ## Known gaps
 
+- **What blocks real-world use is audited in `docs/BLOCKERS-AND-ROADMAP.md`**
+  (session 7): no write path anywhere, the TUI crop selector failing for
+  64 of 66 crops, the efficiency grid covering 4 of 48 texture ×
+  irrigation combinations, and the `region`/`--profile` collision — plus
+  a phased plan. The gaps listed below are the narrower ones.
 - Only N/P/K/S/Ca/Mg are planned; micronutrient (`Fe`/`Mn`/`Zn`/`Cu`/`B`/`Mo`)
   enum variants exist and now have real reference data (critical levels
   since session 2, fertilizer composition since session 3) but aren't
@@ -291,7 +296,144 @@ at the repo root as `HANDOFF.md` before session 5 relocated it here — if
 you're reading this from git blame and the author/timing looks tangled,
 that's why.
 
+## Session 7 — `agroclimatic_adapter` (NASA POWER) and climate-modulated N
+
+First adapter in the project that crosses a **network** rather than
+reading a local file. Everything about it is shaped by one constraint:
+the plan must run offline. The port returns `Err`, the use case turns
+that into `None`, and the plan proceeds on baseline constants — a climate
+failure can never fail a plan.
+
+- **New port `AgroclimaticRepository`** (`ports/output.rs`): coordinates
+  in, `AnnualClimatology` out. Deliberately names no provider, no time
+  window and no parameter codes, so Open-Meteo or Agromonitoring drop in
+  behind it untouched. Which variables a provider can supply is expressed
+  by leaving fields `None`, not by widening the trait.
+- **New entity `AnnualClimatology`**: eight `Option<f64>` annual figures
+  plus `annual_precip_mm()`/`annual_et0_mm()`. All optional because a
+  grid cell can be missing any of them.
+- **`FieldContext` gained `latitude`/`longitude`** (`Option<f64>`,
+  `#[serde(default)]`) — a lot without coordinates simply gets no climate
+  enrichment, same path as an API outage.
+- **`FertilityPlan` gained `mineralization_factor` + `climate`**, so the
+  output can state which regime produced each number instead of leaving
+  the reader to guess.
+- **Domain services** (all pure, no IO): `mineralization_factor` (the
+  `0.015 × T_factor × W_factor` formula), `efficiency_climate_adjustment`
+  (returns `EfficiencyAdjustment`, three deltas that only ever *narrow*
+  the optimistic end of an efficiency range), `rue_index`, and
+  `reference_et0_hargreaves_mm_day`. Each rule carries an
+  `// AGRONOMIC_NOTE:` explaining why the signal matters agronomically.
+- **`ANNUAL_MINERALIZATION_FACTOR` retired**: the session-4 `ponytail:`
+  ceiling is now `services::BASELINE_MINERALIZATION_FACTOR`, the fallback
+  that climate modulates rather than the only value available.
+- **`infra/agroclimatic_adapter/`**: `nasa_power.rs` (blocking `reqwest`,
+  10 s timeout, `-999` sentinel filtered to `None`, HTTP status checked
+  *before* decoding) and `cache.rs` (`CachedAgroclimaticRepo`, in-memory
+  `HashMap` keyed on coordinates rounded to 2 dp; a poisoned mutex is a
+  cache miss, never a panic; failures are not cached so a transient
+  outage doesn't pin a lot to "no climate" for the session).
+- **CLI**: `--no-climate` on `plan`. Output labels every climate-derived
+  figure, e.g. `N mineralization factor: 0.0102  [climate-adjusted,
+  T=13.2°C]` vs `0.0150  [baseline — no climate data]`, plus an
+  informational `Solar yield potential: HIGH (RUE index 0.81)`.
+
+**Three corrections to the session brief**, all verified against the live
+API and the repo:
+
+1. **`ET0_PENMAN` does not exist.** It is not an AG-community climatology
+   parameter, and requesting it does not yield `-999` — POWER rejects the
+   *entire request* with HTTP 422 (`"One of your parameters is incorrect:
+   ET0_PENMAN."`), so every other variable is lost too. The only ET-ish
+   parameters available are `EVLAND`/`EVPTRNS`, which are *actual*
+   evapotranspiration in MJ/m²/day, not reference ET0 — and actual ET
+   can't exceed the water supply, so the water-deficit rule keyed on
+   `ET0 > 1.5 × precip` could never fire under rainfed conditions.
+   Resolved by requesting `TOA_SW_DWN` instead and deriving ET0 with the
+   **FAO-56 Hargreaves** equation, FAO's own sanctioned fallback when
+   Penman-Monteith inputs are unavailable. Computed **per month and then
+   averaged**: the equation's `(Tmax − Tmin)` term must be a within-period
+   diurnal range, and POWER's `ANN` entries for `T2M_MAX`/`T2M_MIN` are
+   annual *extremes* (22.59/4.42 for Pasto, vs ~20.9/5.9 monthly), which
+   would inflate ET0 by ~20%.
+2. **`field_context.csv` had no `latitude`/`longitude`** (nor `area_ha`
+   nor `soil_weight_kg_ha`, also named in the brief). Added, with a
+   quoted `coordinates_note` column marking both lots' Pasto coordinates
+   as illustrative.
+3. **`IrrigationType` is `IrrigationSystem`** here, and the `0.015`
+   constant lived in `calculate_fertility_plan.rs`, not `services.rs`.
+   `nitrogen_available_kg_ha` already took the factor as a parameter
+   since session 4, so that deliverable needed no change.
+
+Also deviated: the use case holds `Option<Box<dyn AgroclimaticRepository>>`
+rather than the brief's `Option<&dyn ...>` — every other repository here
+is a `Box<dyn>`, and a borrow would have forced a lifetime parameter onto
+the struct for no gain.
+
+`data/curated/field_context.csv` now carries `latitude,longitude,
+coordinates_note`. Both lots point at Pasto, Nariño (1.2136, −77.2811),
+**illustrative, not surveyed** — the note column says so per row.
+
+Verified end-to-end:
+
+- With network: N availability 42.6 kg/ha (was 62.4), net requirement
+  325.3 kg/ha (was 290.5), factor 0.0102 — the cold Andean site
+  mineralizes ~2/3 of the tropical baseline, the agronomically expected
+  direction. LOT-002 (drip) gets 0.0079, confirming `W_factor` pins to
+  1.0 under irrigation.
+- `--no-climate`: baseline 0.0150, one stderr warning, exit 0.
+- Network blocked (`HTTPS_PROXY` to a closed port): identical baseline
+  plan, one warning, **exit 0**. Blackholed proxy: cuts at 10.2 s, still
+  exit 0 with a full plan.
+- `cargo test`: 45/45 (20 new — 11 in `services.rs`, 7 in `nasa_power.rs`
+  parsing a trimmed real Pasto response, 3 in `cache.rs`).
+  `cargo build`: zero warnings.
+
+TODO(gap) added: **the TUI passes `None`** — the fetch is blocking with a
+10 s timeout and the render loop is single-threaded, so wiring it in
+would freeze the UI on every plan. Needs a background fetch or a
+pre-warmed cache first. The CLI has climate today; the TUI does not.
+
+**Concurrency note:** this session started while a third session was
+mid-write on the liming feature (session 6) in the same uncommitted tree
+— `cargo check` was failing and `CalculateFertilityPlan::new` was
+half-wired. Work was paused until that settled rather than risk
+interleaved edits to the five files both sessions needed; nothing was
+lost, and the climate work then built on top of the finished liming
+constructor.
+
 ## Checklist — data still to gather / implement
+
+From session 7 (agroclimatic adapter):
+
+- [ ] **Both curated lots share one illustrative coordinate pair.** Pasto
+      (1.2136, −77.2811) stands in for LOT-001 and LOT-002 alike, so they
+      necessarily resolve to the same POWER grid cell and the same
+      climatology. Real per-lot coordinates are needed before any climate
+      number here means anything about a specific field.
+- [ ] **The three efficiency rules are uncalibrated.** One flat 0.05
+      penalty per signal, thresholds (35 °C, ET0 > 1.5× precip, 2000 mm)
+      taken as round agronomic rules of thumb rather than from a fitted
+      dataset. They are deliberately conservative and don't compound, but
+      no field data backs the magnitude. `ponytail:`-flagged in
+      `services.rs`.
+- [ ] **Hargreaves ET0 is a substitute for a real Penman-Monteith ET0.**
+      It uses the diurnal temperature range as a proxy for humidity and
+      cloudiness; POWER already returns real `RH2M` and `WS2M`, which are
+      currently stored and unused. Open-Meteo exposes a genuine FAO-56
+      `et0_fao_evapotranspiration` — the natural second adapter behind
+      `AgroclimaticRepository`, and the first real test of whether that
+      port is as swappable as intended.
+- [ ] **`RUE_index` is computed and displayed but feeds nothing.** Per
+      the brief it must not modify any dose this session. The right home
+      is a yield-gap use case, where a radiation-limited site should have
+      its *yield target* questioned rather than its fertilizer dose
+      adjusted. TODO(gap) marked in `services.rs`.
+- [ ] **A 30-year climatology is not a season.** Every figure here is a
+      long-term mean, so it characterizes a site, not the year being
+      planned. Planning against an actual forecast or the current
+      season's observations is a different data product (and a different
+      POWER endpoint) — `vigil` already does this for daily weather.
 
 From session 2 (Tabla 10/11/12):
 

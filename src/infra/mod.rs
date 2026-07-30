@@ -2,6 +2,7 @@
 //! composition root that wires them together. Everything that touches a
 //! file path, a CLI framework or a serialization format lives here.
 
+pub mod agroclimatic_adapter;
 pub mod bootstrap;
 pub mod cli_adapter;
 pub mod csv_critical_levels_repo;
@@ -17,6 +18,7 @@ pub mod static_liming_rules_repo;
 pub mod tui_adapter;
 pub mod yaml_efficiency_rules_repo;
 
+pub use agroclimatic_adapter::{CachedAgroclimaticRepo, NasaPowerRepo};
 pub use csv_critical_levels_repo::CsvCriticalLevelsRepo;
 pub use csv_crop_catalog_repo::CsvCropCatalogRepo;
 pub use csv_fertilizer_sources_repo::CsvFertilizerSourcesRepo;

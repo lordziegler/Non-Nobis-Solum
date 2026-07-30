@@ -196,7 +196,12 @@ impl Tui {
             self.plan = None;
             return self.fail_key("err_no_lot");
         };
-        match bootstrap::build_calculate_fertility_plan(&self.cfg.layout()).and_then(|uc| uc.calculate(scenario)) {
+        // TODO(gap): no climate enrichment in the TUI. The fetch is
+        // blocking with a 10 s timeout and this is a single-threaded
+        // render loop, so wiring it here would freeze the UI on every
+        // plan. Needs a background fetch (or a pre-warmed cache) first —
+        // the CLI has it today.
+        match bootstrap::build_calculate_fertility_plan(&self.cfg.layout(), None).and_then(|uc| uc.calculate(scenario)) {
             Ok(plan) => {
                 self.plan = Some(plan);
                 self.info("msg_plan_done");

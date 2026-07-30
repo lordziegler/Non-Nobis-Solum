@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 
 use crate::core::application::{CalculateFertilityPlan, InspectScenario, ListSupportedCrops};
 use crate::core::domain::DomainError;
+use crate::core::ports::AgroclimaticRepository;
 use crate::infra::{
-    CsvCriticalLevelsRepo, CsvCropCatalogRepo, CsvFertilizerSourcesRepo, CsvFieldContextRepo, CsvLimingMaterialsRepo,
-    CsvNutrientRemovalRepo, CsvSoilTestsRepo, CsvYieldTargetsRepo, StaticConversionFactorsRepo, StaticLimingRulesRepo,
-    YamlEfficiencyRulesRepo,
+    CachedAgroclimaticRepo, CsvCriticalLevelsRepo, CsvCropCatalogRepo, CsvFertilizerSourcesRepo, CsvFieldContextRepo,
+    CsvLimingMaterialsRepo, CsvNutrientRemovalRepo, CsvSoilTestsRepo, CsvYieldTargetsRepo, NasaPowerRepo,
+    StaticConversionFactorsRepo, StaticLimingRulesRepo, YamlEfficiencyRulesRepo,
 };
 
 /// Resolves paths for a chosen reference profile plus the fixed curated
@@ -107,7 +108,25 @@ impl App {
     }
 }
 
-pub fn build_calculate_fertility_plan(layout: &DataLayout) -> Result<CalculateFertilityPlan, DomainError> {
+/// The live agroclimatic provider: NASA POWER behind an in-memory cache.
+///
+/// Returns `None` rather than an error if the HTTP client can't even be
+/// constructed — at this layer that is indistinguishable from the API
+/// being down, and neither is allowed to stop a plan.
+///
+/// Swapping providers happens here and nowhere else: build a different
+/// `AgroclimaticRepository` and the use case is none the wiser.
+pub fn build_agroclimatic_repo() -> Option<Box<dyn AgroclimaticRepository>> {
+    let repo = NasaPowerRepo::new().ok()?;
+    Some(Box::new(CachedAgroclimaticRepo::new(Box::new(repo))))
+}
+
+/// `agroclimatic` is `None` for an offline plan (`--no-climate`, or any
+/// front-end that shouldn't block on a network call).
+pub fn build_calculate_fertility_plan(
+    layout: &DataLayout,
+    agroclimatic: Option<Box<dyn AgroclimaticRepository>>,
+) -> Result<CalculateFertilityPlan, DomainError> {
     Ok(CalculateFertilityPlan::new(
         Box::new(CsvSoilTestsRepo::new(layout.curated("soil_tests.csv"))),
         Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),
@@ -119,6 +138,7 @@ pub fn build_calculate_fertility_plan(layout: &DataLayout) -> Result<CalculateFe
         Box::new(CsvFertilizerSourcesRepo::new(layout.reference("fertilizer_sources.csv"))),
         Box::new(StaticLimingRulesRepo::from_toml_file(layout.reference("liming_rules.toml"))?),
         Box::new(CsvLimingMaterialsRepo::new(layout.reference("liming_materials.csv"))),
+        agroclimatic,
     ))
 }
 
