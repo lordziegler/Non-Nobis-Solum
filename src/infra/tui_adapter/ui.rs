@@ -55,6 +55,8 @@ fn context_bar(frame: &mut Frame, area: Rect, tui: &Tui) {
         "mode_help"
     } else if tui.filtering {
         "mode_filter"
+    } else if tui.editing_yield {
+        "mode_yield"
     } else {
         "mode_nav"
     };
@@ -73,6 +75,9 @@ fn context_bar(frame: &mut Frame, area: Rect, tui: &Tui) {
 }
 
 fn statusline(frame: &mut Frame, area: Rect, tui: &Tui) {
+    if tui.editing_yield {
+        return statusline_with(frame, area, tui, "hint_yield");
+    }
     let hint = match tui.screen {
         Screen::Dashboard => "hint_dashboard",
         Screen::Plan => "hint_plan",
@@ -80,6 +85,10 @@ fn statusline(frame: &mut Frame, area: Rect, tui: &Tui) {
         Screen::Inspect => "hint_inspect",
         Screen::Settings => "hint_settings",
     };
+    statusline_with(frame, area, tui, hint);
+}
+
+fn statusline_with(frame: &mut Frame, area: Rect, tui: &Tui, hint: &str) {
     let left = Line::from(vec![
         Span::styled(format!(" {} ", screen_title(tui)), tui.theme.accent()),
         Span::styled(tui.i18n.t(hint).to_string(), tui.theme.muted()),
@@ -190,7 +199,8 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let [filter_area, table_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let [filter_area, yield_area, table_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(inner);
     let cursor = if tui.filtering { "█" } else { "" };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -199,6 +209,7 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
         ])),
         filter_area,
     );
+    frame.render_widget(Paragraph::new(yield_line(tui)), yield_area);
 
     let matches = tui.filtered_crops();
     if matches.is_empty() {
@@ -222,6 +233,20 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
     .header(header(tui, &["col_crop_id", "col_name", "col_type", "col_family"]))
     .row_highlight_style(tui.theme.selected());
     frame.render_stateful_widget(table, table_area, &mut TableState::default().with_selected(Some(tui.crop_idx)));
+}
+
+/// The yield-goal field under the crop filter. Empty until a crop is
+/// picked, because a yield goal only means anything next to a crop.
+fn yield_line<'a>(tui: &Tui) -> Line<'a> {
+    let Some(crop_id) = &tui.crop_override else {
+        return Line::raw("");
+    };
+    let cursor = if tui.editing_yield { "█" } else { "" };
+    Line::from(vec![
+        Span::styled(format!("{} {crop_id}: ", tui.i18n.t("crops_yield")), tui.theme.muted()),
+        Span::styled(format!("{}{cursor}", tui.yield_input), tui.theme.accent()),
+        Span::styled(format!(" {}", super::YIELD_UNIT), tui.theme.muted()),
+    ])
 }
 
 fn plan(frame: &mut Frame, area: Rect, tui: &Tui) {
@@ -426,7 +451,10 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
         ("?", "help_help"),
     ];
     match tui.screen {
-        Screen::Crops => keys.insert(0, ("/", "help_filter")),
+        Screen::Crops => {
+            keys.insert(0, ("/", "help_filter"));
+            keys.insert(1, ("0-9 · .", "help_yield"));
+        }
         Screen::Settings => keys.insert(0, ("h/l · ←/→", "help_change")),
         _ => {}
     }

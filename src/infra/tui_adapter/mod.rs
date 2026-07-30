@@ -23,7 +23,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use ratatui::DefaultTerminal;
 
 use crate::core::application::{FertilityScenario, ScenarioInspection};
-use crate::core::domain::{Crop, DomainError, FertilityPlan};
+use crate::core::domain::{Crop, DomainError, FertilityPlan, YieldTarget};
 use crate::core::ports::{FertilityCalculatorPort, ListCropsPort};
 use crate::infra::bootstrap::{self, App as Composition, LotRow};
 
@@ -61,6 +61,14 @@ const SETTINGS: [&str; 5] = [
 /// muted on the inspect screen instead of being silently dropped.
 const UNPLANNED_MICRONUTRIENTS: [&str; 6] = ["Fe", "Mn", "Zn", "Cu", "B", "Mo"];
 
+/// Unit a yield goal typed into the TUI is expressed in. Every row of
+/// every shipped `nutrient_removal.csv` is `t_ha`, and the removal
+/// repository rejects a mismatch with its own error, so this is a
+/// constant rather than one more field to fill in.
+/// ponytail: promote to a picker if a reference profile ever ships a crop
+/// measured in something else.
+const YIELD_UNIT: &str = "t_ha";
+
 pub struct Tui {
     cfg: Composition,
     i18n: I18n,
@@ -76,6 +84,11 @@ pub struct Tui {
     crop_idx: usize,
     /// Crop picked from the catalog, overriding the lot's curated crop.
     crop_override: Option<String>,
+    /// Yield goal typed for the picked crop, as raw text. Only ever set
+    /// for the currently selected (lot, crop) pair — both selections clear
+    /// it — so a stale number can never leak into another scenario.
+    yield_input: String,
+    editing_yield: bool,
     filter: String,
     filtering: bool,
     plan: Option<FertilityPlan>,
@@ -115,6 +128,8 @@ impl Tui {
             crops: Vec::new(),
             crop_idx: 0,
             crop_override: None,
+            yield_input: String::new(),
+            editing_yield: false,
             filter: String::new(),
             filtering: false,
             plan: None,
@@ -152,7 +167,7 @@ impl Tui {
     fn reload(&mut self) {
         self.plan = None;
         self.inspection = None;
-        self.crop_override = None;
+        self.clear_crop_choice();
         self.crop_idx = 0;
         self.lot_idx = 0;
         self.scroll = 0;
@@ -173,6 +188,35 @@ impl Tui {
         }
     }
 
+    /// Drops both the picked crop and the yield goal typed for it. They
+    /// are a pair: a yield goal only ever means something next to the crop
+    /// it was typed for.
+    fn clear_crop_choice(&mut self) {
+        self.crop_override = None;
+        self.yield_input.clear();
+        self.editing_yield = false;
+    }
+
+    /// Whether `data/curated/yield_targets.csv` already has a goal for the
+    /// selected lot and the given crop. Read from the rows already in
+    /// memory — no IO, and the same file the plan would consult.
+    fn has_curated_yield_target(&self, crop_id: &str) -> bool {
+        let Some(lot) = self.lots.get(self.lot_idx) else {
+            return false;
+        };
+        self.lots
+            .iter()
+            .any(|row| row.field_id == lot.field_id && row.crop_id == crop_id && row.yield_value > 0.0)
+    }
+
+    /// The typed yield goal, if it is a usable number. Anything else is
+    /// treated as "not entered", so the plan falls back to the curated
+    /// target and reports its own error if there is none.
+    fn typed_yield_target(&self) -> Option<YieldTarget> {
+        let value = self.yield_input.trim().parse::<f64>().ok()?;
+        (value.is_finite() && value > 0.0).then(|| YieldTarget { value, unit: YIELD_UNIT.to_string() })
+    }
+
     fn scenario(&self) -> Option<FertilityScenario> {
         let lot = self.lots.get(self.lot_idx)?;
         Some(FertilityScenario {
@@ -182,9 +226,10 @@ impl Tui {
             // ponytail: same placeholder the CLI defaults to; the real
             // harvested organ per crop is an open item in docs/HANDOFF.md.
             product: "grain".to_string(),
-            // None on purpose: falls back to the curated yield target, which
-            // is what the lot row on screen is showing.
-            yield_override: None,
+            // `None` falls back to the curated yield target, which is what
+            // the lot row on screen shows. A typed goal is what unblocks
+            // the 64 catalog crops that have no curated row at all.
+            yield_override: self.typed_yield_target(),
         })
     }
 
@@ -269,6 +314,9 @@ impl Tui {
         if self.filtering {
             return self.on_filter_key(code);
         }
+        if self.editing_yield {
+            return self.on_yield_key(code);
+        }
         let in_settings = self.screen == Screen::Settings && !self.focus_modules;
         match code {
             KeyCode::Char('?') => self.help = true,
@@ -305,6 +353,32 @@ impl Tui {
         self.crop_idx = 0;
     }
 
+    /// Numeric entry for a yield goal. Only digits and one decimal
+    /// separator get in, so the field can't hold something the plan would
+    /// choke on later.
+    fn on_yield_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => {
+                self.yield_input.clear();
+                self.editing_yield = false;
+            }
+            KeyCode::Enter => match self.typed_yield_target() {
+                Some(_) => {
+                    self.editing_yield = false;
+                    self.screen = Screen::Dashboard;
+                    self.info("msg_yield_set");
+                }
+                None => self.fail_key("err_bad_yield"),
+            },
+            KeyCode::Backspace => {
+                self.yield_input.pop();
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => self.yield_input.push(c),
+            KeyCode::Char('.') if !self.yield_input.contains('.') => self.yield_input.push('.'),
+            _ => {}
+        }
+    }
+
     fn mnemonic(&mut self, pressed: char) {
         if let Some((idx, module)) = MODULES.iter().enumerate().find(|(_, m)| m.1 == pressed) {
             self.module_idx = idx;
@@ -321,8 +395,9 @@ impl Tui {
             Screen::Dashboard => {
                 let next = step(self.lot_idx, self.lots.len(), delta);
                 if next != self.lot_idx {
-                    // A different lot invalidates a crop picked for the previous one.
-                    self.crop_override = None;
+                    // A different lot invalidates a crop picked for the
+                    // previous one, and the yield goal typed alongside it.
+                    self.clear_crop_choice();
                 }
                 self.lot_idx = next;
             }
@@ -342,10 +417,21 @@ impl Tui {
         match self.screen {
             Screen::Dashboard => self.run_plan(),
             Screen::Crops => {
-                if let Some(crop) = self.filtered_crops().get(self.crop_idx) {
-                    self.crop_override = Some(crop.crop_id.clone());
+                let Some(crop_id) = self.filtered_crops().get(self.crop_idx).map(|crop| crop.crop_id.clone()) else {
+                    return;
+                };
+                self.clear_crop_choice();
+                let curated = self.has_curated_yield_target(&crop_id);
+                self.crop_override = Some(crop_id);
+                if curated {
                     self.screen = Screen::Dashboard;
                     self.info("msg_crop_selected");
+                } else {
+                    // 64 of the 66 catalog crops land here: no curated
+                    // yield goal exists, so ask for one instead of letting
+                    // the plan fail on a missing row.
+                    self.editing_yield = true;
+                    self.info("msg_yield_needed");
                 }
             }
             Screen::Settings => self.change_setting(1),
@@ -471,6 +557,75 @@ mod tests {
         assert!(!matches.is_empty() && matches.len() < tui.crops.len());
         assert!(matches.iter().all(|c| c.crop_id.contains("corn") || c.name.to_lowercase().contains("corn")));
         assert_eq!(tui.crop_idx, 0);
+    }
+
+    /// The blocker this unlocks: 64 of the 66 catalog crops have no row in
+    /// `yield_targets.csv`, so picking one used to guarantee a failed plan.
+    #[test]
+    fn a_crop_without_a_curated_yield_goal_asks_for_one_and_then_plans() {
+        let mut tui = tui();
+        tui.open(Some(Screen::Crops));
+        press(&mut tui, KeyCode::Char('/'));
+        for c in "wheat".chars() {
+            press(&mut tui, KeyCode::Char(c));
+        }
+        press(&mut tui, KeyCode::Enter); // leave the filter
+        press(&mut tui, KeyCode::Enter); // pick the crop
+
+        assert_eq!(tui.crop_override.as_deref(), Some("wheat"));
+        assert!(tui.editing_yield, "a crop with no curated goal must prompt for one");
+
+        press(&mut tui, KeyCode::Enter); // empty input
+        assert!(tui.is_error && tui.editing_yield, "an empty yield goal must be refused");
+        for c in "0abc".chars() {
+            press(&mut tui, KeyCode::Char(c));
+        }
+        assert_eq!(tui.yield_input, "0", "only digits and one separator may be typed");
+        press(&mut tui, KeyCode::Enter);
+        assert!(tui.is_error && tui.editing_yield, "a zero yield goal must be refused");
+
+        for c in ".5".chars() {
+            press(&mut tui, KeyCode::Char(c));
+        }
+        press(&mut tui, KeyCode::Enter);
+        assert!(!tui.editing_yield && tui.screen == Screen::Dashboard);
+
+        let scenario = tui.scenario().expect("a lot is selected");
+        assert_eq!(scenario.crop_id, "wheat");
+        assert_eq!(scenario.yield_override.map(|target| target.value), Some(0.5));
+
+        tui.run_plan();
+        assert!(tui.plan.is_some(), "wheat should now plan: {}", tui.message);
+    }
+
+    #[test]
+    fn a_crop_with_a_curated_yield_goal_is_left_alone() {
+        let mut tui = tui();
+        tui.open(Some(Screen::Crops));
+        press(&mut tui, KeyCode::Char('/'));
+        for c in "corn".chars() {
+            press(&mut tui, KeyCode::Char(c));
+        }
+        press(&mut tui, KeyCode::Enter);
+        press(&mut tui, KeyCode::Enter);
+
+        // LOT-001/corn is curated, so nothing is asked and nothing overrides.
+        assert!(!tui.editing_yield);
+        assert_eq!(tui.screen, Screen::Dashboard);
+        assert!(tui.scenario().expect("a lot is selected").yield_override.is_none());
+    }
+
+    #[test]
+    fn changing_lot_drops_the_crop_and_its_typed_yield_goal() {
+        let mut tui = tui();
+        tui.crop_override = Some("wheat".to_string());
+        tui.yield_input = "6.5".to_string();
+        tui.screen = Screen::Dashboard;
+        tui.focus_modules = false;
+
+        tui.move_selection(1);
+
+        assert!(tui.crop_override.is_none() && tui.yield_input.is_empty());
     }
 
     #[test]
