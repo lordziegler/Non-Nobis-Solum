@@ -1,0 +1,63 @@
+//! Reads `data/curated/field_context.csv` — physical/chemical context of
+//! a field/lot (texture, irrigation, bulk density...), curated once per
+//! field rather than re-entered on every planning run.
+
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use serde::Deserialize;
+
+use crate::core::domain::{DomainError, FieldContext, IrrigationSystem, Texture};
+use crate::core::ports::FieldContextRepository;
+
+#[derive(Debug, Deserialize)]
+struct FieldContextRow {
+    field_id: String,
+    sample_id: String,
+    texture: String,
+    irrigation_system: String,
+    organic_matter_percent: f64,
+    ph: f64,
+    cec: f64,
+    bulk_density_kg_dm3: f64,
+    arable_depth_m: f64,
+    region: String,
+}
+
+pub struct CsvFieldContextRepo {
+    path: PathBuf,
+}
+
+impl CsvFieldContextRepo {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self { path: path.as_ref().to_path_buf() }
+    }
+}
+
+impl FieldContextRepository for CsvFieldContextRepo {
+    fn get_context_by_field_id(&self, field_id: &str) -> Result<FieldContext, DomainError> {
+        let mut reader = csv::Reader::from_path(&self.path)
+            .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
+
+        for row in reader.deserialize::<FieldContextRow>() {
+            let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
+            if row.field_id != field_id {
+                continue;
+            }
+            return Ok(FieldContext {
+                field_id: row.field_id,
+                sample_id: row.sample_id,
+                texture: Texture::from_str(&row.texture)?,
+                irrigation_system: IrrigationSystem::from_str(&row.irrigation_system)?,
+                organic_matter_percent: row.organic_matter_percent,
+                ph: row.ph,
+                cec_cmolc_kg: row.cec,
+                bulk_density_kg_dm3: row.bulk_density_kg_dm3,
+                arable_depth_m: row.arable_depth_m,
+                region: row.region,
+            });
+        }
+
+        Err(DomainError::NotFound(format!("no field context for field_id={field_id}")))
+    }
+}

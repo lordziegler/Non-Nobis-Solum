@@ -1,0 +1,67 @@
+crop_id,name,crop_type,family
+corn,Corn,cereal,Poaceae
+wheat,Wheat,cereal,Poaceae
+potato,Potato,tuber,Solanaceae
+rice,Rice,cereal,Poaceae
+coffee,Coffee,perennial,Rubiaceae
+sugarcane,Sugarcane,perennial,Poaceae
+soybean,Soybean,legume,Fabaceae
+tomato,Tomato,vegetable,Solanaceae
+bean,Common bean,legume,Fabaceae
+onion,Onion,vegetable,Amaryllidaceae
+carrot,Carrot,vegetable,Apiaceae
+pasture,Pasture grass,forage,Poaceae
+sorghum,Sorghum,cereal,Poaceae
+orange,Orange,perennial,Rutaceae
+cassava,Cassava,tuber,Euphorbiaceae
+sunflower,Sunflower,oilseed,Asteraceae
+pea,Pea,legume,Fabaceae
+cucumber,Cucumber,vegetable,Cucurbitaceae
+bell_pepper,Bell Pepper,vegetable,Solanaceae
+lettuce,Lettuce,vegetable,Asteraceae
+celery,Celery,vegetable,Apiaceae
+broccoli,Broccoli,vegetable,Brassicaceae
+cauliflower,Cauliflower,vegetable,Brassicaceae
+cabbage,Cabbage,vegetable,Brassicaceae
+spinach,Spinach,vegetable,Amaranthaceae
+asparagus,Asparagus,vegetable,Asparagaceae
+artichoke,Artichoke,vegetable,Asteraceae
+beet,Beet,vegetable,Amaranthaceae
+barley,Barley,cereal,Poaceae
+oats,Oats,cereal,Poaceae
+plum,Plum,perennial,Rosaceae
+peach,Peach,perennial,Rosaceae
+apple,Apple,perennial,Rosaceae
+grape,Grape,perennial,Vitaceae
+pear,Pear,perennial,Rosaceae
+melon,Melon,vegetable,Cucurbitaceae
+pineapple,Pineapple,perennial,Bromeliaceae
+banana,Banana,perennial,Musaceae
+watermelon,Watermelon,vegetable,Cucurbitaceae
+lemon,Lemon,perennial,Rutaceae
+mandarin,Mandarin,perennial,Rutaceae
+tamarillo,Tamarillo,perennial,Solanaceae
+avocado_hass,Avocado Hass,perennial,Lauraceae
+mango,Mango,perennial,Anacardiaceae
+papaya,Papaya,perennial,Caricaceae
+lulo,Lulo,perennial,Solanaceae
+blackberry,Blackberry,perennial,Rosaceae
+strawberry,Strawberry,vegetable,Rosaceae
+kikuyu_grass,Kikuyu Grass,forage,Poaceae
+tall_fescue,Tall Fescue,forage,Poaceae
+alfalfa,Alfalfa,forage,Fabaceae
+ryegrass,Ryegrass,forage,Poaceae
+clover,Clover,forage,Fabaceae
+vetch,Vetch,forage,Fabaceae
+forage_sorghum,Forage Sorghum,forage,Poaceae
+orchoro_grass,Orchoro Grass,forage,Poaceae
+elephant_grass,Elephant Grass,forage,Poaceae
+guinea_grass,Guinea Grass,forage,Poaceae
+pangola_grass,Pangola Grass,forage,Poaceae
+brachiaria_grass,Brachiaria Grass,forage,Poaceae
+cotton,Cotton,oilseed,Malvaceae
+oil_palm,Oil Palm,perennial,Arecaceae
+tobacco,Tobacco,other,Solanaceae
+sugar_beet,Sugar Beet,vegetable,Amaranthaceae
+rose,Rose,other,Rosaceae
+boston_fern,Boston Fern,other,Nephrolepidaceae

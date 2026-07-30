@@ -1,0 +1,3 @@
+field_id,sample_id,texture,irrigation_system,organic_matter_percent,ph,cec,bulk_density_kg_dm3,arable_depth_m,region
+LOT-001,LOT-001,loam,rainfed,3.2,6.3,12.0,1.3,0.2,andina_colombia
+LOT-002,LOT-002,clay_loam,drip,2.5,5.8,18.0,1.2,0.2,andina_colombia

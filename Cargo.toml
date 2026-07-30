@@ -1,0 +1,13 @@
+[package]
+name = "non_nobis_solum"
+version = "0.1.0"
+edition = "2021"
+description = "Fertilization plan engine driven by soil analysis, crop removal coefficients, efficiency rules and fertilizer sources."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+csv = "1"
+toml = "0.8"
+serde_yaml = "0.9"
+clap = { version = "4", features = ["derive"] }
+thiserror = "1"

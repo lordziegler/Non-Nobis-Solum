@@ -1,0 +1,52 @@
+# Universal unit and chemical-form conversions. Shared by every reference
+# profile — atomic weights and unit definitions don't change by region.
+# Source: standard fertilizer conversion tables (see assets/conversion-factors.csv
+# in the project root for the original literature table this was ported from).
+
+[mass]
+N = 14.007
+P = 30.974
+K = 39.098
+S = 32.06
+Ca = 40.078
+Mg = 24.305
+
+[unit_conversion]
+# Exchangeable cations reported in cmolc/kg -> mg/kg, by nutrient.
+"cmolc_per_kg_to_mg_per_kg.K" = 391.0
+"cmolc_per_kg_to_mg_per_kg.Ca" = 200.0
+"cmolc_per_kg_to_mg_per_kg.Mg" = 121.0
+
+# Ionic <-> elemental form, for lab results reported as NH4/NO3 instead of N.
+"NH4_to_N" = 0.7772102368
+"N_to_NH4" = 1.286975624
+"NO3_to_N" = 0.2258677624
+"N_to_NO3" = 4.427423742
+
+# Elemental <-> oxide form, used for fertilizer bag labeling (e.g. "18-46-0").
+"P_to_P2O5" = 2.291108362
+"P2O5_to_P" = 0.4364267631
+"K_to_K2O" = 1.204593799
+"K2O_to_K" = 0.8301513890
+"Ca_to_CaO" = 1.399198194
+"CaO_to_Ca" = 0.7146965001
+"Mg_to_MgO" = 1.658273935
+"MgO_to_Mg" = 0.6030369366
+
+# Elemental <-> oxide/anion form for sulfur.
+"S_to_SO4" = 3.121876482
+"SO4_to_S" = 0.3203028540
+"S_to_SO3" = 2.497240154
+"SO3_to_S" = 0.4004416215
+
+# Elemental <-> oxide form for micronutrients.
+"Fe_to_FeO" = 1.286513445
+"FeO_to_Fe" = 0.7773091983
+"Mn_to_MnO" = 1.291994407
+"MnO_to_Mn" = 0.7744032557
+"Cu_to_CuO" = 1.252000000
+"CuO_to_Cu" = 0.7987186850
+"B_to_B2O3" = 3.220000000
+"B2O3_to_B" = 0.3105430000
+"Zn_to_ZnO" = 1.244820000
+"ZnO_to_Zn" = 0.8033656150
