@@ -82,6 +82,15 @@ pub struct FieldContext {
     pub longitude: Option<f64>,
 }
 
+/// One curated planning row: which crop is planned on which lot, and the
+/// yield goal to plan it for (`data/curated/yield_targets.csv`).
+#[derive(Debug, Clone)]
+pub struct LotYieldTarget {
+    pub field_id: String,
+    pub crop_id: String,
+    pub target: YieldTarget,
+}
+
 /// A long-term (30-year) climatology reduced to the annual figures the
 /// domain actually consumes, as returned by an `AgroclimaticRepository`.
 ///

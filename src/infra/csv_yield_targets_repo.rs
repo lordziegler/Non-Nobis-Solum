@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::core::domain::{DomainError, YieldTarget};
+use crate::core::domain::{DomainError, LotYieldTarget, YieldTarget};
 use crate::core::ports::YieldTargetRepository;
 
 #[derive(Debug, Deserialize)]
@@ -42,5 +42,22 @@ impl YieldTargetRepository for CsvYieldTargetsRepo {
         Err(DomainError::NotFound(format!(
             "no yield target for field_id={field_id} crop_id={crop_id}"
         )))
+    }
+
+    fn list_targets(&self) -> Result<Vec<LotYieldTarget>, DomainError> {
+        let reader = csv::Reader::from_path(&self.path)
+            .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
+
+        reader
+            .into_deserialize::<YieldTargetRow>()
+            .map(|row| {
+                let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
+                Ok(LotYieldTarget {
+                    field_id: row.field_id,
+                    crop_id: row.crop_id,
+                    target: YieldTarget { value: row.yield_value, unit: row.yield_unit },
+                })
+            })
+            .collect()
     }
 }

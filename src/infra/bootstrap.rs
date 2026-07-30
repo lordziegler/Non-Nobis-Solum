@@ -8,13 +8,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::core::application::{CalculateFertilityPlan, InspectScenario, ListSupportedCrops};
+use crate::core::application::{CalculateFertilityPlan, InspectScenario, ListLots, ListSupportedCrops, RegisterLot};
 use crate::core::domain::DomainError;
 use crate::core::ports::AgroclimaticRepository;
 use crate::infra::{
-    CachedAgroclimaticRepo, CsvCriticalLevelsRepo, CsvCropCatalogRepo, CsvFertilizerSourcesRepo, CsvFieldContextRepo,
-    CsvLimingMaterialsRepo, CsvNutrientRemovalRepo, CsvSoilTestsRepo, CsvYieldTargetsRepo, NasaPowerRepo,
-    StaticConversionFactorsRepo, StaticLimingRulesRepo, YamlEfficiencyRulesRepo,
+    CachedAgroclimaticRepo, CsvCriticalLevelsRepo, CsvCropCatalogRepo, CsvCuratedWriter, CsvFertilizerSourcesRepo,
+    CsvFieldContextRepo, CsvLimingMaterialsRepo, CsvNutrientRemovalRepo, CsvSoilTestsRepo, CsvYieldTargetsRepo,
+    NasaPowerRepo, StaticConversionFactorsRepo, StaticLimingRulesRepo, YamlEfficiencyRulesRepo,
 };
 
 /// Resolves paths for a chosen reference profile plus the fixed curated
@@ -59,18 +59,6 @@ pub fn build_app() -> App {
     App { data_root: PathBuf::from("data"), profile: "global".to_string() }
 }
 
-/// One curated planning row: a lot, the crop planned on it, and its yield
-/// goal. TODO(gap): there is no `ListLots` use case in `core::ports`, so
-/// the TUI's lot selector is fed straight from the curated planning file
-/// here in the composition root rather than through a port.
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct LotRow {
-    pub field_id: String,
-    pub crop_id: String,
-    pub yield_value: f64,
-    pub yield_unit: String,
-}
-
 impl App {
     pub fn layout(&self) -> DataLayout {
         DataLayout::new(&self.data_root, &self.profile)
@@ -96,15 +84,6 @@ impl App {
             .collect();
         found.sort();
         found
-    }
-
-    pub fn lots(&self) -> Result<Vec<LotRow>, DomainError> {
-        let mut reader = csv::Reader::from_path(self.curated_dir().join("yield_targets.csv"))
-            .map_err(|e| DomainError::DataSource(e.to_string()))?;
-        reader
-            .deserialize()
-            .collect::<Result<Vec<LotRow>, _>>()
-            .map_err(|e| DomainError::DataSource(e.to_string()))
     }
 }
 
@@ -140,6 +119,28 @@ pub fn build_calculate_fertility_plan(
         Box::new(CsvLimingMaterialsRepo::new(layout.reference("liming_materials.csv"))),
         agroclimatic,
     ))
+}
+
+/// Lot picker data. Reads the curated lots themselves, not the planning
+/// rows: a lot exists whether or not a crop is planned on it.
+pub fn build_list_lots(layout: &DataLayout) -> ListLots {
+    ListLots::new(
+        Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),
+        Box::new(CsvYieldTargetsRepo::new(layout.curated("yield_targets.csv"))),
+    )
+}
+
+/// The only use case wired to a writer. Curated data is profile-independent,
+/// so this is the same set of files whichever reference profile is active.
+pub fn build_register_lot(layout: &DataLayout) -> RegisterLot {
+    RegisterLot::new(
+        Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),
+        Box::new(CsvCuratedWriter::new(
+            layout.curated("field_context.csv"),
+            layout.curated("soil_tests.csv"),
+            layout.curated("yield_targets.csv"),
+        )),
+    )
 }
 
 pub fn build_list_supported_crops(layout: &DataLayout) -> ListSupportedCrops {

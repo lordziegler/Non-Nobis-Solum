@@ -10,7 +10,8 @@ use ratatui::Frame;
 
 use super::i18n::Language;
 use super::{Screen, Tui, MODULES, SETTINGS, UNPLANNED_MICRONUTRIENTS};
-use crate::core::domain::SoilStatus;
+use crate::core::application::LotSummary;
+use crate::core::domain::{IrrigationSystem, SoilStatus, Texture};
 
 /// Below this width the status column is dropped rather than squeezed —
 /// an 80x24 terminal keeps modules + workspace intact.
@@ -51,25 +52,30 @@ fn panel<'a>(title: String, focused: bool, tui: &Tui) -> Block<'a> {
 }
 
 fn context_bar(frame: &mut Frame, area: Rect, tui: &Tui) {
+    let editing_form = tui.form.as_ref().is_some_and(|form| form.editing);
     let mode = if tui.help {
         "mode_help"
     } else if tui.filtering {
         "mode_filter"
     } else if tui.editing_yield {
         "mode_yield"
+    } else if editing_form {
+        "mode_edit"
     } else {
         "mode_nav"
     };
-    let lot = tui.lots.get(tui.lot_idx);
+    let lot = tui.lots.get(tui.lot_idx).map(|lot| lot.field_id.clone());
     let mut spans = vec![
         Span::styled(format!(" {} ", tui.i18n.t(mode)), tui.theme.selected()),
         Span::raw(" non·nobis·solum "),
         Span::styled(format!("· {} ", tui.i18n.t("app_subtitle")), tui.theme.muted()),
         Span::styled(format!("· {} {} ", tui.i18n.t("st_profile"), tui.cfg.profile), tui.theme.accent()),
     ];
-    if let Some(lot) = lot {
-        spans.push(Span::raw(format!("· {} {} ", tui.i18n.t("st_lot"), lot.field_id)));
-        spans.push(Span::raw(format!("· {} ", crop_of(tui, lot))));
+    if let Some(field_id) = lot {
+        spans.push(Span::raw(format!("· {} {field_id} ", tui.i18n.t("st_lot"))));
+        if let Some(crop) = tui.active_crop() {
+            spans.push(Span::raw(format!("· {crop} ")));
+        }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -83,6 +89,7 @@ fn statusline(frame: &mut Frame, area: Rect, tui: &Tui) {
         Screen::Plan => "hint_plan",
         Screen::Crops => "hint_crops",
         Screen::Inspect => "hint_inspect",
+        Screen::NewLot | Screen::NewSample => "hint_form",
         Screen::Settings => "hint_settings",
     };
     statusline_with(frame, area, tui, hint);
@@ -132,9 +139,10 @@ fn status_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
         field(tui, "st_crops", tui.crops.len().to_string()),
     ];
     if let Some(lot) = tui.lots.get(tui.lot_idx) {
+        let crop = crop_of(tui, lot);
         lines.push(field(tui, "st_lot", lot.field_id.clone()));
-        lines.push(field(tui, "col_crop", crop_of(tui, lot)));
-        lines.push(field(tui, "col_yield", format!("{} {}", lot.yield_value, lot.yield_unit)));
+        lines.push(field(tui, "col_yield", yield_of(tui, lot, &crop, true)));
+        lines.push(field(tui, "col_crop", crop));
     }
     if let Some(inspection) = &tui.inspection {
         let context = &inspection.field_context;
@@ -163,8 +171,63 @@ fn workspace(frame: &mut Frame, area: Rect, tui: &Tui) {
         Screen::Crops => crops(frame, area, tui),
         Screen::Plan => plan(frame, area, tui),
         Screen::Inspect => inspect(frame, area, tui),
+        Screen::NewLot | Screen::NewSample => form(frame, area, tui),
         Screen::Settings => settings(frame, area, tui),
     }
+}
+
+/// Accepted values for the closed-set fields, read straight off the domain
+/// enums so this hint can never drift from what `from_str` accepts.
+fn accepted_values(field: &str) -> Option<String> {
+    let values = match field {
+        "form_texture" => Texture::ALL.iter().map(Texture::to_string).collect::<Vec<_>>(),
+        "form_irrigation" => IrrigationSystem::ALL.iter().map(IrrigationSystem::to_string).collect(),
+        _ => return None,
+    };
+    Some(values.join(" · "))
+}
+
+fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
+    let title = if tui.screen == Screen::NewSample { "form_new_sample_title" } else { "form_new_lot_title" };
+    let block = panel(tui.i18n.t(title).to_string(), !tui.focus_modules, tui);
+    let Some(form) = &tui.form else {
+        return frame.render_widget(block, area);
+    };
+
+    let mut items: Vec<ListItem> = form
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(index, (label, value))| {
+            let editing = form.editing && index == form.idx;
+            let cursor = if editing { "█" } else { "" };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!(" {:<22}", tui.i18n.t(label)), tui.theme.muted()),
+                Span::styled(format!("{value}{cursor}"), tui.theme.accent()),
+            ]))
+        })
+        .collect();
+    items.push(ListItem::new(Line::styled(
+        format!(" [ {} ]", tui.i18n.t("form_save")),
+        tui.theme.title(),
+    )));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [list_area, hint_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(inner);
+
+    let list = List::new(items).highlight_style(tui.theme.selected());
+    frame.render_stateful_widget(list, list_area, &mut ListState::default().with_selected(Some(form.idx)));
+
+    let hint = form
+        .fields
+        .get(form.idx)
+        .and_then(|(label, _)| accepted_values(label))
+        .unwrap_or_else(|| tui.i18n.t("form_optional_hint").to_string());
+    frame.render_widget(
+        Paragraph::new(Line::styled(format!(" {hint}"), tui.theme.muted())).wrap(Wrap { trim: true }),
+        hint_area,
+    );
 }
 
 fn dashboard(frame: &mut Frame, area: Rect, tui: &Tui) {
@@ -178,17 +241,30 @@ fn dashboard(frame: &mut Frame, area: Rect, tui: &Tui) {
         .iter()
         .enumerate()
         .map(|(index, lot)| {
-            let crop = if index == tui.lot_idx { crop_of(tui, lot) } else { lot.crop_id.clone() };
+            let selected = index == tui.lot_idx;
+            let crop = if selected {
+                crop_of(tui, lot)
+            } else {
+                lot.default_crop().unwrap_or(tui.i18n.t("value_none")).to_string()
+            };
+            let goal = yield_of(tui, lot, &crop, selected);
             Row::new(vec![
                 Cell::from(lot.field_id.clone()),
                 Cell::from(crop),
-                Cell::from(format!("{} {}", lot.yield_value, lot.yield_unit)),
+                Cell::from(goal),
+                Cell::from(Span::styled(
+                    format!("{} · {}", lot.texture, lot.irrigation_system),
+                    tui.theme.muted(),
+                )),
             ])
         })
         .collect();
 
-    let table = Table::new(rows, [Constraint::Length(12), Constraint::Min(14), Constraint::Length(14)])
-        .header(header(tui, &["col_lot", "col_crop", "col_yield"]))
+    let table = Table::new(
+        rows,
+        [Constraint::Length(12), Constraint::Min(14), Constraint::Length(14), Constraint::Length(26)],
+    )
+    .header(header(tui, &["col_lot", "col_crop", "col_yield", "col_soil"]))
         .row_highlight_style(tui.theme.selected())
         .block(block);
     frame.render_stateful_widget(table, area, &mut TableState::default().with_selected(Some(tui.lot_idx)));
@@ -456,6 +532,7 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
             keys.insert(1, ("0-9 · .", "help_yield"));
         }
         Screen::Settings => keys.insert(0, ("h/l · ←/→", "help_change")),
+        Screen::NewLot | Screen::NewSample => keys.insert(0, ("Enter", "help_edit")),
         _ => {}
     }
 
@@ -487,6 +564,8 @@ fn screen_title(tui: &Tui) -> &str {
         Screen::Plan => "plan_title",
         Screen::Crops => "crops_title",
         Screen::Inspect => "inspect_title",
+        Screen::NewLot => "form_new_lot_title",
+        Screen::NewSample => "form_new_sample_title",
         Screen::Settings => "settings_title",
     })
 }
@@ -551,8 +630,21 @@ fn planned_status(tui: &Tui, nutrient: &str) -> Option<SoilStatus> {
         .soil_status
 }
 
-fn crop_of(tui: &Tui, lot: &crate::infra::bootstrap::LotRow) -> String {
-    tui.crop_override.clone().unwrap_or_else(|| lot.crop_id.clone())
+fn crop_of(tui: &Tui, lot: &LotSummary) -> String {
+    tui.crop_override
+        .clone()
+        .or_else(|| lot.default_crop().map(str::to_string))
+        .unwrap_or_else(|| tui.i18n.t("value_none").to_string())
+}
+
+/// The goal shown for a lot: the curated one for the crop on that row,
+/// or — on the selected row only — the goal typed in the crop catalog.
+fn yield_of(tui: &Tui, lot: &LotSummary, crop: &str, selected: bool) -> String {
+    match lot.target_for(crop) {
+        Some(target) => format!("{} {}", target.value, target.unit),
+        None if selected && !tui.yield_input.is_empty() => format!("{} {}", tui.yield_input, super::YIELD_UNIT),
+        None => tui.i18n.t("value_none").to_string(),
+    }
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -590,8 +682,19 @@ mod tests {
         tui.run_inspect();
         assert!(tui.inspection.is_some(), "LOT-001 should inspect: {}", tui.message);
 
-        for screen in [Screen::Dashboard, Screen::Plan, Screen::Crops, Screen::Inspect, Screen::Settings] {
-            tui.screen = screen;
+        for screen in [
+            Screen::Dashboard,
+            Screen::Plan,
+            Screen::Crops,
+            Screen::Inspect,
+            Screen::NewLot,
+            Screen::NewSample,
+            Screen::Settings,
+        ] {
+            match screen {
+                Screen::NewLot | Screen::NewSample => tui.open_form(screen),
+                _ => tui.screen = screen,
+            }
             // 80x24 drops the status column; 130x40 shows all three.
             for (width, height) in [(80, 24), (130, 40)] {
                 let out = render(&tui, width, height);

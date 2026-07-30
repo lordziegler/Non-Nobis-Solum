@@ -40,32 +40,50 @@ impl CsvFieldContextRepo {
     }
 }
 
+impl TryFrom<FieldContextRow> for FieldContext {
+    type Error = DomainError;
+
+    fn try_from(row: FieldContextRow) -> Result<Self, Self::Error> {
+        Ok(FieldContext {
+            field_id: row.field_id,
+            sample_id: row.sample_id,
+            texture: Texture::from_str(&row.texture)?,
+            irrigation_system: IrrigationSystem::from_str(&row.irrigation_system)?,
+            organic_matter_percent: row.organic_matter_percent,
+            ph: row.ph,
+            cec_cmolc_kg: row.cec,
+            bulk_density_kg_dm3: row.bulk_density_kg_dm3,
+            arable_depth_m: row.arable_depth_m,
+            region: row.region,
+            latitude: row.latitude,
+            longitude: row.longitude,
+        })
+    }
+}
+
+impl CsvFieldContextRepo {
+    fn rows(&self) -> Result<impl Iterator<Item = Result<FieldContextRow, DomainError>>, DomainError> {
+        let reader = csv::Reader::from_path(&self.path)
+            .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
+        Ok(reader
+            .into_deserialize::<FieldContextRow>()
+            .map(|row| row.map_err(|e| DomainError::DataSource(e.to_string()))))
+    }
+}
+
 impl FieldContextRepository for CsvFieldContextRepo {
     fn get_context_by_field_id(&self, field_id: &str) -> Result<FieldContext, DomainError> {
-        let mut reader = csv::Reader::from_path(&self.path)
-            .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
-
-        for row in reader.deserialize::<FieldContextRow>() {
-            let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
-            if row.field_id != field_id {
-                continue;
+        for row in self.rows()? {
+            let row = row?;
+            if row.field_id == field_id {
+                return row.try_into();
             }
-            return Ok(FieldContext {
-                field_id: row.field_id,
-                sample_id: row.sample_id,
-                texture: Texture::from_str(&row.texture)?,
-                irrigation_system: IrrigationSystem::from_str(&row.irrigation_system)?,
-                organic_matter_percent: row.organic_matter_percent,
-                ph: row.ph,
-                cec_cmolc_kg: row.cec,
-                bulk_density_kg_dm3: row.bulk_density_kg_dm3,
-                arable_depth_m: row.arable_depth_m,
-                region: row.region,
-                latitude: row.latitude,
-                longitude: row.longitude,
-            });
         }
 
         Err(DomainError::NotFound(format!("no field context for field_id={field_id}")))
+    }
+
+    fn list_contexts(&self) -> Result<Vec<FieldContext>, DomainError> {
+        self.rows()?.map(|row| row?.try_into()).collect()
     }
 }

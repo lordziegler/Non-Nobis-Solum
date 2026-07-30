@@ -13,7 +13,7 @@
 
 use crate::core::domain::{
     AnnualClimatology, Crop, CriticalLevel, DomainError, FertilizerSource, FieldContext, IrrigationSystem,
-    LimingMaterial, RemovalReference, SoilTest, Texture, YieldTarget,
+    LimingMaterial, LotYieldTarget, RemovalReference, SoilTest, Texture, YieldTarget,
 };
 
 pub trait SoilTestRepository {
@@ -22,12 +22,33 @@ pub trait SoilTestRepository {
 
 pub trait FieldContextRepository {
     fn get_context_by_field_id(&self, field_id: &str) -> Result<FieldContext, DomainError>;
+    /// Every curated lot, in file order. This is the authoritative list of
+    /// what exists: a lot is a lot whether or not anything is planned on it.
+    fn list_contexts(&self) -> Result<Vec<FieldContext>, DomainError>;
 }
 
 /// Scenario-specific yield goals (curated planning data, not science
 /// literature — see `data/curated/yield_targets.csv`).
 pub trait YieldTargetRepository {
     fn get_yield_target(&self, field_id: &str, crop_id: &str) -> Result<YieldTarget, DomainError>;
+    fn list_targets(&self) -> Result<Vec<LotYieldTarget>, DomainError>;
+}
+
+/// The one write port in the project: appends new rows to the curated
+/// files under `data/curated/`.
+///
+/// Deliberately append-only. Creating a lot, a sample or a planning row is
+/// all the write access anything needs today; editing an existing row
+/// means a read-modify-rename cycle, which is a different contract and can
+/// be added when something actually asks for it.
+///
+/// Every method takes already-validated domain types — validation belongs
+/// to the use case that owns the trust boundary (`RegisterLot`), not to
+/// the adapter that serializes.
+pub trait CuratedDataWriter {
+    fn save_field_context(&self, context: &FieldContext) -> Result<(), DomainError>;
+    fn save_soil_tests(&self, tests: &[SoilTest]) -> Result<(), DomainError>;
+    fn save_yield_target(&self, field_id: &str, crop_id: &str, target: &YieldTarget) -> Result<(), DomainError>;
 }
 
 pub trait CropCatalogRepository {

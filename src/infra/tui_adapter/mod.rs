@@ -22,10 +22,10 @@ mod ui;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use crate::core::application::{FertilityScenario, ScenarioInspection};
+use crate::core::application::{FertilityScenario, LotRegistration, LotSummary, ScenarioInspection, SoilTestEntry};
 use crate::core::domain::{Crop, DomainError, FertilityPlan, YieldTarget};
-use crate::core::ports::{FertilityCalculatorPort, ListCropsPort};
-use crate::infra::bootstrap::{self, App as Composition, LotRow};
+use crate::core::ports::{FertilityCalculatorPort, ListCropsPort, ListLotsPort, RegisterLotPort};
+use crate::infra::bootstrap::{self, App as Composition};
 
 use i18n::{I18n, Language};
 use theme::Theme;
@@ -36,17 +36,51 @@ pub enum Screen {
     Plan,
     Crops,
     Inspect,
+    NewLot,
+    NewSample,
     Settings,
 }
 
 /// Left navigation column: label id, mnemonic, target screen (`None` quits).
-const MODULES: [(&str, char, Option<Screen>); 6] = [
+const MODULES: [(&str, char, Option<Screen>); 8] = [
     ("module_home", 'h', Some(Screen::Dashboard)),
     ("module_plan", 'f', Some(Screen::Plan)),
     ("module_crops", 'c', Some(Screen::Crops)),
     ("module_inspect", 'i', Some(Screen::Inspect)),
+    ("module_new_lot", 'n', Some(Screen::NewLot)),
+    ("module_new_sample", 's', Some(Screen::NewSample)),
     ("module_settings", ',', Some(Screen::Settings)),
     ("module_quit", 'q', None),
+];
+
+/// The "add lot" form, in `LotRegistration` field order. Label ids double
+/// as the mapping to the registration struct — see `Form::registration`.
+const NEW_LOT_FIELDS: [&str; 14] = [
+    "form_field_id",
+    "form_texture",
+    "form_irrigation",
+    "form_om",
+    "form_ph",
+    "form_cec",
+    "form_bulk_density",
+    "form_arable_depth",
+    "form_region",
+    "form_latitude",
+    "form_longitude",
+    "form_crop",
+    "form_yield_value",
+    "form_yield_unit",
+];
+
+/// The "add sample" form: one lab result for an existing lot.
+const NEW_SAMPLE_FIELDS: [&str; 7] = [
+    "form_field_id",
+    "form_nutrient",
+    "form_value",
+    "form_unit",
+    "form_method",
+    "form_depth_from",
+    "form_depth_to",
 ];
 
 const SETTINGS: [&str; 5] = [
@@ -69,6 +103,76 @@ const UNPLANNED_MICRONUTRIENTS: [&str; 6] = ["Fe", "Mn", "Zn", "Cu", "B", "Mo"];
 /// measured in something else.
 const YIELD_UNIT: &str = "t_ha";
 
+/// A data-entry form: a fixed list of labelled text fields plus a trailing
+/// "save" row. Every value stays raw text all the way to `RegisterLot`,
+/// which is the only thing allowed to decide whether it is valid.
+pub struct Form {
+    screen: Screen,
+    fields: Vec<(&'static str, String)>,
+    idx: usize,
+    editing: bool,
+}
+
+impl Form {
+    fn new(screen: Screen, labels: &[&'static str], prefill: &[(&str, String)]) -> Self {
+        let fields = labels
+            .iter()
+            .map(|label| {
+                let value = prefill
+                    .iter()
+                    .find(|(id, _)| id == label)
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_default();
+                (*label, value)
+            })
+            .collect();
+        Self { screen, fields, idx: 0, editing: false }
+    }
+
+    /// One past the last field: the row that submits.
+    fn save_row(&self) -> usize {
+        self.fields.len()
+    }
+
+    fn value(&self, label: &str) -> String {
+        self.fields
+            .iter()
+            .find(|(id, _)| *id == label)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default()
+    }
+
+    fn registration(&self) -> LotRegistration {
+        LotRegistration {
+            field_id: self.value("form_field_id"),
+            texture: self.value("form_texture"),
+            irrigation_system: self.value("form_irrigation"),
+            organic_matter_percent: self.value("form_om"),
+            ph: self.value("form_ph"),
+            cec_cmolc_kg: self.value("form_cec"),
+            bulk_density_kg_dm3: self.value("form_bulk_density"),
+            arable_depth_m: self.value("form_arable_depth"),
+            region: self.value("form_region"),
+            latitude: self.value("form_latitude"),
+            longitude: self.value("form_longitude"),
+            crop_id: self.value("form_crop"),
+            yield_value: self.value("form_yield_value"),
+            yield_unit: self.value("form_yield_unit"),
+        }
+    }
+
+    fn soil_test_entry(&self) -> SoilTestEntry {
+        SoilTestEntry {
+            nutrient_id: self.value("form_nutrient"),
+            value: self.value("form_value"),
+            unit: self.value("form_unit"),
+            method: self.value("form_method"),
+            depth_from_cm: self.value("form_depth_from"),
+            depth_to_cm: self.value("form_depth_to"),
+        }
+    }
+}
+
 pub struct Tui {
     cfg: Composition,
     i18n: I18n,
@@ -78,7 +182,7 @@ pub struct Tui {
     focus_modules: bool,
     module_idx: usize,
     profiles: Vec<String>,
-    lots: Vec<LotRow>,
+    lots: Vec<LotSummary>,
     lot_idx: usize,
     crops: Vec<Crop>,
     crop_idx: usize,
@@ -93,6 +197,9 @@ pub struct Tui {
     filtering: bool,
     plan: Option<FertilityPlan>,
     inspection: Option<ScenarioInspection>,
+    /// The form currently on screen, if any. Rebuilt each time a form
+    /// screen is opened, so a half-typed lot never survives a detour.
+    form: Option<Form>,
     scroll: u16,
     setting_idx: usize,
     message: String,
@@ -134,6 +241,7 @@ impl Tui {
             filtering: false,
             plan: None,
             inspection: None,
+            form: None,
             scroll: 0,
             setting_idx: 0,
             message: String::new(),
@@ -165,6 +273,10 @@ impl Tui {
     /// Reloads everything that depends on the selected profile. Called at
     /// startup and whenever the profile changes in Settings.
     fn reload(&mut self) {
+        // Whatever went wrong before, it was about data that is being
+        // re-read right now; callers check `is_error` afterwards to decide
+        // whether the reload itself failed.
+        self.is_error = false;
         self.plan = None;
         self.inspection = None;
         self.clear_crop_choice();
@@ -179,7 +291,7 @@ impl Tui {
                 self.fail(e);
             }
         }
-        match self.cfg.lots() {
+        match bootstrap::build_list_lots(&self.cfg.layout()).list_lots() {
             Ok(lots) => self.lots = lots,
             Err(e) => {
                 self.lots.clear();
@@ -197,16 +309,15 @@ impl Tui {
         self.editing_yield = false;
     }
 
+    fn selected_lot(&self) -> Option<&LotSummary> {
+        self.lots.get(self.lot_idx)
+    }
+
     /// Whether `data/curated/yield_targets.csv` already has a goal for the
-    /// selected lot and the given crop. Read from the rows already in
-    /// memory — no IO, and the same file the plan would consult.
+    /// selected lot and the given crop. Answered from the summaries already
+    /// in memory — no IO, same rows the plan would consult.
     fn has_curated_yield_target(&self, crop_id: &str) -> bool {
-        let Some(lot) = self.lots.get(self.lot_idx) else {
-            return false;
-        };
-        self.lots
-            .iter()
-            .any(|row| row.field_id == lot.field_id && row.crop_id == crop_id && row.yield_value > 0.0)
+        self.selected_lot().and_then(|lot| lot.target_for(crop_id)).is_some()
     }
 
     /// The typed yield goal, if it is a usable number. Anything else is
@@ -217,12 +328,21 @@ impl Tui {
         (value.is_finite() && value > 0.0).then(|| YieldTarget { value, unit: YIELD_UNIT.to_string() })
     }
 
+    /// The crop the next plan would use: the one picked from the catalog,
+    /// or the lot's curated one. `None` for a lot that has neither — a
+    /// registered lot with no planning row yet.
+    fn active_crop(&self) -> Option<String> {
+        self.crop_override
+            .clone()
+            .or_else(|| self.selected_lot()?.default_crop().map(str::to_string))
+    }
+
     fn scenario(&self) -> Option<FertilityScenario> {
-        let lot = self.lots.get(self.lot_idx)?;
+        let lot = self.selected_lot()?;
         Some(FertilityScenario {
             sample_id: lot.field_id.clone(),
             field_id: lot.field_id.clone(),
-            crop_id: self.crop_override.clone().unwrap_or_else(|| lot.crop_id.clone()),
+            crop_id: self.active_crop()?,
             // ponytail: same placeholder the CLI defaults to; the real
             // harvested organ per crop is an open item in docs/HANDOFF.md.
             product: "grain".to_string(),
@@ -239,7 +359,7 @@ impl Tui {
         self.scroll = 0;
         let Some(scenario) = self.scenario() else {
             self.plan = None;
-            return self.fail_key("err_no_lot");
+            return self.fail_missing_scenario();
         };
         // TODO(gap): no climate enrichment in the TUI. The fetch is
         // blocking with a 10 s timeout and this is a single-threaded
@@ -267,7 +387,7 @@ impl Tui {
         self.scroll = 0;
         let Some(scenario) = self.scenario() else {
             self.inspection = None;
-            return self.fail_key("err_no_lot");
+            return self.fail_missing_scenario();
         };
         match bootstrap::build_inspect_scenario(&self.cfg.layout()).and_then(|uc| uc.inspect(&scenario)) {
             Ok(inspection) => {
@@ -278,6 +398,69 @@ impl Tui {
                 self.inspection = None;
                 self.fail(e);
             }
+        }
+    }
+
+    /// A scenario needs a lot *and* a crop; say which one is missing.
+    fn fail_missing_scenario(&mut self) {
+        let id = if self.selected_lot().is_none() { "err_no_lot" } else { "err_no_crop" };
+        self.fail_key(id);
+    }
+
+    // ---- curating new data -----------------------------------------------
+
+    fn open_form(&mut self, screen: Screen) {
+        self.screen = screen;
+        self.focus_modules = false;
+        let form = match screen {
+            Screen::NewSample => Form::new(
+                screen,
+                &NEW_SAMPLE_FIELDS,
+                &[
+                    ("form_field_id", self.selected_lot().map(|lot| lot.field_id.clone()).unwrap_or_default()),
+                    ("form_depth_from", "0".to_string()),
+                ],
+            ),
+            // Region is prefilled with the active profile: the reference
+            // tables a plan reads are the profile's, so a lot curated from
+            // here defaults to matching them.
+            _ => Form::new(
+                screen,
+                &NEW_LOT_FIELDS,
+                &[
+                    ("form_region", self.cfg.profile.clone()),
+                    ("form_yield_unit", YIELD_UNIT.to_string()),
+                ],
+            ),
+        };
+        self.form = Some(form);
+    }
+
+    /// Hands the typed text to `RegisterLot`, which is where it is parsed,
+    /// validated and — only then — written. Every rejection lands in the
+    /// status bar with the port's own message.
+    fn submit_form(&mut self) {
+        let Some(form) = &self.form else { return };
+        let use_case = bootstrap::build_register_lot(&self.cfg.layout());
+        let (outcome, message) = match form.screen {
+            Screen::NewSample => (
+                use_case.add_soil_tests(&form.value("form_field_id"), &[form.soil_test_entry()]),
+                "msg_sample_saved",
+            ),
+            _ => (use_case.register_lot(&form.registration()), "msg_lot_saved"),
+        };
+
+        match outcome {
+            Ok(()) => {
+                self.form = None;
+                self.screen = Screen::Dashboard;
+                self.focus_modules = true;
+                self.reload();
+                if !self.is_error {
+                    self.info(message);
+                }
+            }
+            Err(e) => self.fail(e),
         }
     }
 
@@ -316,6 +499,9 @@ impl Tui {
         }
         if self.editing_yield {
             return self.on_yield_key(code);
+        }
+        if self.form.as_ref().is_some_and(|form| form.editing) {
+            return self.on_form_edit_key(code);
         }
         let in_settings = self.screen == Screen::Settings && !self.focus_modules;
         match code {
@@ -379,6 +565,24 @@ impl Tui {
         }
     }
 
+    /// Free text: any value the domain can parse is typed here verbatim,
+    /// including a texture name or a negative coordinate.
+    fn on_form_edit_key(&mut self, code: KeyCode) {
+        let Some(form) = &mut self.form else { return };
+        let Some((_, value)) = form.fields.get_mut(form.idx) else {
+            form.editing = false;
+            return;
+        };
+        match code {
+            KeyCode::Enter | KeyCode::Esc => form.editing = false,
+            KeyCode::Backspace => {
+                value.pop();
+            }
+            KeyCode::Char(c) => value.push(c),
+            _ => {}
+        }
+    }
+
     fn mnemonic(&mut self, pressed: char) {
         if let Some((idx, module)) = MODULES.iter().enumerate().find(|(_, m)| m.1 == pressed) {
             self.module_idx = idx;
@@ -403,6 +607,12 @@ impl Tui {
             }
             Screen::Crops => self.crop_idx = step(self.crop_idx, self.filtered_crops().len(), delta),
             Screen::Settings => self.setting_idx = step(self.setting_idx, SETTINGS.len(), delta),
+            // One row past the last field: the save row.
+            Screen::NewLot | Screen::NewSample => {
+                if let Some(form) = &mut self.form {
+                    form.idx = step(form.idx, form.fields.len() + 1, delta);
+                }
+            }
             // Plan and Inspect are read-only text: j/k scrolls them.
             Screen::Plan | Screen::Inspect => {
                 self.scroll = if delta < 0 { self.scroll.saturating_sub(1) } else { self.scroll.saturating_add(1) }
@@ -435,6 +645,11 @@ impl Tui {
                 }
             }
             Screen::Settings => self.change_setting(1),
+            Screen::NewLot | Screen::NewSample => match &mut self.form {
+                Some(form) if form.idx == form.save_row() => self.submit_form(),
+                Some(form) => form.editing = true,
+                None => {}
+            },
             Screen::Plan | Screen::Inspect => {}
         }
     }
@@ -444,6 +659,7 @@ impl Tui {
             None => self.running = false,
             Some(Screen::Plan) => self.run_plan(),
             Some(Screen::Inspect) => self.run_inspect(),
+            Some(screen @ (Screen::NewLot | Screen::NewSample)) => self.open_form(screen),
             Some(screen) => {
                 self.screen = screen;
                 self.focus_modules = screen == Screen::Dashboard;
@@ -456,6 +672,8 @@ impl Tui {
         if self.screen == Screen::Dashboard {
             self.running = false;
         } else {
+            // Leaving a form discards it: a half-typed lot is not a draft.
+            self.form = None;
             self.screen = Screen::Dashboard;
             self.focus_modules = true;
             self.module_idx = 0;
@@ -524,6 +742,64 @@ mod tests {
 
     fn press(tui: &mut Tui, code: KeyCode) {
         tui.on_key(KeyEvent::from(code));
+    }
+
+    /// A disposable copy of `data/`, so the write tests exercise the real
+    /// adapters without touching the curated files under version control.
+    struct Sandbox {
+        root: std::path::PathBuf,
+    }
+
+    impl Sandbox {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("nns_tui_{}_{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            copy_dir(std::path::Path::new("data"), &root.join("data"));
+            Self { root }
+        }
+
+        fn tui(&self) -> Tui {
+            let cfg = Composition { data_root: self.root.join("data"), profile: "global".to_string() };
+            Tui::new(cfg, &theme::DARK_THEME)
+        }
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).expect("sandbox dir");
+        for entry in std::fs::read_dir(from).expect("read data dir").flatten() {
+            let target = to.join(entry.file_name());
+            if entry.path().is_dir() {
+                copy_dir(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).expect("copy data file");
+            }
+        }
+    }
+
+    /// Types a value into a form field. Navigation and submission still go
+    /// through the real key handling — only the typing is shortcut.
+    fn fill(tui: &mut Tui, label: &str, value: &str) {
+        let form = tui.form.as_mut().expect("a form is on screen");
+        let field = form
+            .fields
+            .iter_mut()
+            .find(|(id, _)| *id == label)
+            .unwrap_or_else(|| panic!("no field {label}"));
+        field.1 = value.to_string();
+    }
+
+    fn save_form(tui: &mut Tui) {
+        let save_row = tui.form.as_ref().expect("a form is on screen").save_row();
+        for _ in 0..save_row {
+            press(tui, KeyCode::Char('j'));
+        }
+        press(tui, KeyCode::Enter);
     }
 
     #[test]
@@ -626,6 +902,82 @@ mod tests {
         tui.move_selection(1);
 
         assert!(tui.crop_override.is_none() && tui.yield_input.is_empty());
+    }
+
+    /// The whole chain phases 1-3 exist for: curate a lot the shipped data
+    /// never had, give it a sample, and plan it — with a texture and an
+    /// irrigation system outside the curated efficiency grid, and a crop
+    /// with no curated yield goal.
+    #[test]
+    fn a_lot_curated_in_the_tui_can_be_sampled_and_planned() {
+        let sandbox = Sandbox::new("register");
+        let mut tui = sandbox.tui();
+        let lots_before = tui.lots.len();
+
+        tui.open(Some(Screen::NewLot));
+        fill(&mut tui, "form_field_id", "LOT-900");
+        fill(&mut tui, "form_texture", "silty_clay");
+        fill(&mut tui, "form_irrigation", "gravity");
+        fill(&mut tui, "form_om", "3.8");
+        fill(&mut tui, "form_ph", "5.5");
+        fill(&mut tui, "form_cec", "15");
+        fill(&mut tui, "form_bulk_density", "1.2");
+        fill(&mut tui, "form_arable_depth", "0.2");
+        save_form(&mut tui);
+
+        assert!(!tui.is_error, "the lot should have saved: {}", tui.message);
+        assert_eq!(tui.lots.len(), lots_before + 1, "the new lot must show up in the picker");
+        let new_lot = tui.lots.iter().position(|lot| lot.field_id == "LOT-900").expect("new lot listed");
+        assert!(tui.lots[new_lot].curated_targets.is_empty(), "a lot with no planning row is still a lot");
+
+        // No soil sample yet: the plan must say so rather than invent one.
+        tui.lot_idx = new_lot;
+        tui.crop_override = Some("wheat".to_string());
+        tui.yield_input = "6".to_string();
+        tui.run_plan();
+        assert!(tui.plan.is_none() && tui.is_error);
+
+        tui.lot_idx = new_lot;
+        tui.open(Some(Screen::NewSample));
+        assert_eq!(
+            tui.form.as_ref().expect("form").value("form_field_id"),
+            "LOT-900",
+            "the sample form must default to the selected lot"
+        );
+        fill(&mut tui, "form_nutrient", "P");
+        fill(&mut tui, "form_value", "12");
+        fill(&mut tui, "form_unit", "mg_per_kg");
+        fill(&mut tui, "form_method", "Olsen");
+        fill(&mut tui, "form_depth_to", "20");
+        save_form(&mut tui);
+        assert!(!tui.is_error, "the sample should have saved: {}", tui.message);
+
+        tui.lot_idx = new_lot;
+        tui.crop_override = Some("wheat".to_string());
+        tui.yield_input = "6".to_string();
+        tui.run_plan();
+        assert!(tui.plan.is_some(), "silty_clay/gravity + wheat should plan: {}", tui.message);
+    }
+
+    #[test]
+    fn an_invalid_lot_keeps_the_form_open_and_shows_the_reason() {
+        let sandbox = Sandbox::new("invalid");
+        let mut tui = sandbox.tui();
+
+        tui.open(Some(Screen::NewLot));
+        fill(&mut tui, "form_field_id", "LOT-001"); // already curated
+        fill(&mut tui, "form_texture", "loam");
+        fill(&mut tui, "form_irrigation", "rainfed");
+        fill(&mut tui, "form_om", "3.2");
+        fill(&mut tui, "form_ph", "6.3");
+        fill(&mut tui, "form_cec", "12");
+        fill(&mut tui, "form_bulk_density", "1.3");
+        fill(&mut tui, "form_arable_depth", "0.2");
+        save_form(&mut tui);
+
+        assert!(tui.is_error && tui.message.contains("LOT-001"), "{}", tui.message);
+        assert_eq!(tui.screen, Screen::NewLot, "a refused form stays open with the typed values");
+        assert_eq!(tui.form.as_ref().expect("form").value("form_field_id"), "LOT-001");
     }
 
     #[test]

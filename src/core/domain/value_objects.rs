@@ -27,6 +27,25 @@ pub enum Texture {
     Clay,
 }
 
+impl Texture {
+    /// Every class, so a front-end can offer the closed set instead of
+    /// re-typing it and drifting from `from_str`.
+    pub const ALL: [Texture; 12] = [
+        Texture::Sand,
+        Texture::LoamySand,
+        Texture::SandyLoam,
+        Texture::Loam,
+        Texture::SiltLoam,
+        Texture::Silt,
+        Texture::SandyClayLoam,
+        Texture::ClayLoam,
+        Texture::SiltyClayLoam,
+        Texture::SandyClay,
+        Texture::SiltyClay,
+        Texture::Clay,
+    ];
+}
+
 impl FromStr for Texture {
     type Err = DomainError;
 
@@ -76,6 +95,15 @@ pub enum IrrigationSystem {
     Gravity,
     Sprinkler,
     Drip,
+}
+
+impl IrrigationSystem {
+    pub const ALL: [IrrigationSystem; 4] = [
+        IrrigationSystem::Rainfed,
+        IrrigationSystem::Gravity,
+        IrrigationSystem::Sprinkler,
+        IrrigationSystem::Drip,
+    ];
 }
 
 impl FromStr for IrrigationSystem {
