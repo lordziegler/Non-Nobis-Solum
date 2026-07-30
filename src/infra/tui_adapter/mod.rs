@@ -16,15 +16,19 @@ pub mod i18n;
 pub mod theme;
 mod ui;
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
 use crate::core::application::{FertilityScenario, LotRegistration, LotSummary, ScenarioInspection, SoilTestEntry};
 use crate::core::domain::{Crop, DomainError, FertilityPlan, YieldTarget};
 use crate::core::ports::{
-    FertilityCalculatorPort, InspectScenarioPort, ListCropsPort, ListLotsPort, RegisterLotPort,
+    AgroclimaticRepository, FertilityCalculatorPort, InspectScenarioPort, ListCropsPort, ListLotsPort, RegisterLotPort,
 };
 use crate::infra::bootstrap::{self, App as Composition};
+use crate::infra::{CachedAgroclimaticRepo, PrewarmedAgroclimaticRepo};
 
 use i18n::{I18n, Language};
 use theme::Theme;
@@ -174,6 +178,12 @@ impl Form {
 
 pub struct Tui {
     cfg: Composition,
+    /// Climatologies fetched off the render loop. `None` disables climate
+    /// entirely (no provider could be built, or a test asked for offline).
+    climate: Option<Arc<CachedAgroclimaticRepo>>,
+    /// Lots a prefetch has already been started for, so scrolling the list
+    /// doesn't fire one request per keystroke.
+    climate_requested: HashSet<String>,
     i18n: I18n,
     theme: &'static Theme,
     screen: Screen,
@@ -211,7 +221,7 @@ pub fn run(cfg: Composition) -> Result<(), DomainError> {
     // Queried before `ratatui::init()` takes the tty into raw mode and the
     // alternate screen — the OSC handshake needs the plain terminal.
     let theme = theme::detect();
-    let mut tui = Tui::new(cfg, theme);
+    let mut tui = Tui::new(cfg, theme, bootstrap::build_climate_cache());
 
     let mut terminal = ratatui::init();
     let result = tui.event_loop(&mut terminal);
@@ -220,10 +230,12 @@ pub fn run(cfg: Composition) -> Result<(), DomainError> {
 }
 
 impl Tui {
-    fn new(cfg: Composition, theme: &'static Theme) -> Self {
+    fn new(cfg: Composition, theme: &'static Theme, climate: Option<Arc<CachedAgroclimaticRepo>>) -> Self {
         let mut tui = Self {
             profiles: cfg.profiles(),
             cfg,
+            climate,
+            climate_requested: HashSet::new(),
             i18n: I18n::new(Language::English),
             theme,
             screen: Screen::Dashboard,
@@ -297,6 +309,30 @@ impl Tui {
                 self.fail(e);
             }
         }
+        self.prefetch_climate();
+    }
+
+    /// Starts fetching the selected lot's climatology on a background
+    /// thread, if it hasn't been asked for already.
+    ///
+    /// Nothing waits for the result: the thread fills the shared cache and
+    /// exits, and the next plan reads whatever is in there through a
+    /// non-blocking view. A plan asked for before the fetch lands runs on
+    /// baseline constants and says so — the same degradation an outage
+    /// takes. This is what keeps a 10 s HTTP timeout out of a
+    /// single-threaded render loop.
+    fn prefetch_climate(&mut self) {
+        let Some(cache) = self.climate.clone() else { return };
+        let Some(lot) = self.selected_lot() else { return };
+        let (Some(latitude), Some(longitude)) = (lot.latitude, lot.longitude) else { return };
+        if !self.climate_requested.insert(lot.field_id.clone()) {
+            return;
+        }
+        std::thread::spawn(move || {
+            // The error is deliberately dropped: an unreachable provider is
+            // an expected state here, reported by the plan's own labelling.
+            let _ = cache.fetch_climatology(latitude, longitude);
+        });
     }
 
     /// Drops both the picked crop and the yield goal typed for it. They
@@ -360,12 +396,14 @@ impl Tui {
             self.plan = None;
             return self.fail_missing_scenario();
         };
-        // TODO(gap): no climate enrichment in the TUI. The fetch is
-        // blocking with a 10 s timeout and this is a single-threaded
-        // render loop, so wiring it here would freeze the UI on every
-        // plan. Needs a background fetch (or a pre-warmed cache) first —
-        // the CLI has it today.
-        match bootstrap::build_calculate_fertility_plan(&self.cfg.layout(), None).and_then(|uc| uc.calculate(scenario)) {
+        // Reads the prefetched climatology, never the network: a miss is
+        // reported as "provider unavailable" and the plan falls back to
+        // baseline constants, exactly as `--no-climate` does on the CLI.
+        let climate = self
+            .climate
+            .clone()
+            .map(|cache| Box::new(PrewarmedAgroclimaticRepo::new(cache)) as Box<dyn AgroclimaticRepository>);
+        match bootstrap::build_calculate_fertility_plan(&self.cfg.layout(), climate).and_then(|uc| uc.calculate(scenario)) {
             Ok(plan) => {
                 self.plan = Some(plan);
                 self.info("msg_plan_done");
@@ -601,8 +639,9 @@ impl Tui {
                     // A different lot invalidates a crop picked for the
                     // previous one, and the yield goal typed alongside it.
                     self.clear_crop_choice();
+                    self.lot_idx = next;
+                    self.prefetch_climate();
                 }
-                self.lot_idx = next;
             }
             Screen::Crops => self.crop_idx = step(self.crop_idx, self.filtered_crops().len(), delta),
             Screen::Settings => self.setting_idx = step(self.setting_idx, SETTINGS.len(), delta),
@@ -735,8 +774,10 @@ fn io_error(error: std::io::Error) -> DomainError {
 mod tests {
     use super::*;
 
+    /// Always offline: `None` for the climate cache means the tests never
+    /// open a socket and never wait on one.
     fn tui() -> Tui {
-        Tui::new(bootstrap::build_app(), &theme::DARK_THEME)
+        Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None)
     }
 
     fn press(tui: &mut Tui, code: KeyCode) {
@@ -759,7 +800,7 @@ mod tests {
 
         fn tui(&self) -> Tui {
             let cfg = Composition { data_root: self.root.join("data"), profile: "global".to_string() };
-            Tui::new(cfg, &theme::DARK_THEME)
+            Tui::new(cfg, &theme::DARK_THEME, None)
         }
     }
 
@@ -977,6 +1018,51 @@ mod tests {
         assert!(tui.is_error && tui.message.contains("LOT-001"), "{}", tui.message);
         assert_eq!(tui.screen, Screen::NewLot, "a refused form stays open with the typed values");
         assert_eq!(tui.form.as_ref().expect("form").value("form_field_id"), "LOT-001");
+    }
+
+    /// Climate parity with the CLI, without a network call in the render
+    /// loop: a plan sees a climatology only once something else has put it
+    /// in the shared cache.
+    #[test]
+    fn a_plan_uses_a_prewarmed_climatology_and_runs_on_baseline_without_one() {
+        use crate::core::domain::{services, AnnualClimatology};
+
+        struct FakeProvider;
+        impl AgroclimaticRepository for FakeProvider {
+            fn fetch_climatology(&self, _latitude: f64, _longitude: f64) -> Result<AnnualClimatology, DomainError> {
+                Ok(AnnualClimatology {
+                    mean_temp_c: Some(13.2),
+                    precip_mm_per_day: Some(3.0),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let mut tui = tui();
+        let lot = tui.lots.first().expect("a curated lot").clone();
+
+        // Cold: no cache at all, so the plan is baseline and says so.
+        tui.run_plan();
+        let cold = tui.plan.as_ref().expect("a plan without climate");
+        assert!(cold.climate.is_none());
+        assert_eq!(cold.mineralization_factor, services::BASELINE_MINERALIZATION_FACTOR);
+
+        // Warm: whatever the background thread would have done, done here
+        // synchronously so the test never races it.
+        let cache = Arc::new(CachedAgroclimaticRepo::new(Box::new(FakeProvider)));
+        cache
+            .fetch_climatology(lot.latitude.expect("lat"), lot.longitude.expect("lon"))
+            .expect("prewarm");
+        tui.climate = Some(cache);
+
+        tui.run_plan();
+        let warm = tui.plan.as_ref().expect("a plan with climate");
+        assert_eq!(warm.climate.as_ref().and_then(|c| c.mean_temp_c), Some(13.2));
+        assert_ne!(
+            warm.mineralization_factor,
+            services::BASELINE_MINERALIZATION_FACTOR,
+            "a climatology must actually move the factor"
+        );
     }
 
     #[test]

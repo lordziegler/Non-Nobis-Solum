@@ -19,7 +19,7 @@ pub mod static_liming_rules_repo;
 pub mod tui_adapter;
 pub mod yaml_efficiency_rules_repo;
 
-pub use agroclimatic_adapter::{CachedAgroclimaticRepo, NasaPowerRepo};
+pub use agroclimatic_adapter::{CachedAgroclimaticRepo, NasaPowerRepo, PrewarmedAgroclimaticRepo};
 pub use csv_critical_levels_repo::CsvCriticalLevelsRepo;
 pub use csv_crop_catalog_repo::CsvCropCatalogRepo;
 pub use csv_curated_writer::CsvCuratedWriter;

@@ -9,7 +9,7 @@
 //! caching is an optimization and must never be able to fail a plan.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::core::domain::{AnnualClimatology, DomainError};
 use crate::core::ports::AgroclimaticRepository;
@@ -27,14 +27,49 @@ fn cache_key(latitude: f64, longitude: f64) -> CacheKey {
 /// same coordinates from memory. Useful for a long-lived front-end
 /// planning several crops on one lot; a single CLI run never hits it
 /// twice.
+///
+/// `Send + Sync` on the inner repository is what lets the same cache be
+/// filled by a background thread and read by the render loop — see
+/// [`PrewarmedAgroclimaticRepo`].
 pub struct CachedAgroclimaticRepo {
-    inner: Box<dyn AgroclimaticRepository>,
+    inner: Box<dyn AgroclimaticRepository + Send + Sync>,
     entries: Mutex<HashMap<CacheKey, AnnualClimatology>>,
 }
 
 impl CachedAgroclimaticRepo {
-    pub fn new(inner: Box<dyn AgroclimaticRepository>) -> Self {
+    pub fn new(inner: Box<dyn AgroclimaticRepository + Send + Sync>) -> Self {
         Self { inner, entries: Mutex::new(HashMap::new()) }
+    }
+
+    /// What is already in memory, without ever reaching the network.
+    pub fn cached(&self, latitude: f64, longitude: f64) -> Option<AnnualClimatology> {
+        self.entries.lock().ok()?.get(&cache_key(latitude, longitude)).cloned()
+    }
+}
+
+/// A non-blocking view over a shared [`CachedAgroclimaticRepo`]: a hit is
+/// returned, a miss is an `ExternalServiceUnavailable` error.
+///
+/// This exists for the TUI, whose render loop is single-threaded and can
+/// afford exactly zero seconds of a 10 s HTTP timeout. Something else
+/// (the front-end's prefetch thread) fills the cache; a plan asked for
+/// before that lands degrades to baseline constants, which is the same
+/// path an outage already takes.
+pub struct PrewarmedAgroclimaticRepo {
+    cache: Arc<CachedAgroclimaticRepo>,
+}
+
+impl PrewarmedAgroclimaticRepo {
+    pub fn new(cache: Arc<CachedAgroclimaticRepo>) -> Self {
+        Self { cache }
+    }
+}
+
+impl AgroclimaticRepository for PrewarmedAgroclimaticRepo {
+    fn fetch_climatology(&self, latitude: f64, longitude: f64) -> Result<AnnualClimatology, DomainError> {
+        self.cache.cached(latitude, longitude).ok_or_else(|| {
+            DomainError::ExternalServiceUnavailable(format!("climatology for {latitude},{longitude} not fetched yet"))
+        })
     }
 }
 
@@ -129,6 +164,24 @@ mod tests {
         let other = repo.fetch_climatology(4.71, -74.07).expect("different cell");
         assert_eq!(counter.calls.load(Ordering::SeqCst), 2);
         assert_eq!(other.mean_temp_c, Some(4.71));
+    }
+
+    #[test]
+    fn the_prewarmed_view_never_fetches_and_sees_what_the_cache_holds() {
+        let counter = std::sync::Arc::new(CountingRepo::new(false));
+        let cache = std::sync::Arc::new(cached(&counter));
+        let prewarmed = PrewarmedAgroclimaticRepo::new(cache.clone());
+
+        // Nothing fetched yet: a miss, and still no call to the provider.
+        assert!(prewarmed.fetch_climatology(1.2136, -77.2811).is_err());
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 0, "the prewarmed view must never fetch");
+
+        // Whoever is allowed to block fills the cache; the view then sees it.
+        cache.fetch_climatology(1.2136, -77.2811).expect("background fetch");
+        assert_eq!(
+            prewarmed.fetch_climatology(1.2136, -77.2811).expect("hit").mean_temp_c,
+            Some(1.2136)
+        );
     }
 
     #[test]

@@ -16,6 +16,10 @@ pub struct LotSummary {
     pub texture: Texture,
     pub irrigation_system: IrrigationSystem,
     pub curated_targets: Vec<(String, YieldTarget)>,
+    /// Carried so a front-end can warm a climatology for the lot before
+    /// anyone asks for a plan. `None` for a lot with no surveyed position.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 impl LotSummary {
@@ -59,6 +63,8 @@ impl ListLotsPort for ListLots {
                 field_id: context.field_id,
                 texture: context.texture,
                 irrigation_system: context.irrigation_system,
+                latitude: context.latitude,
+                longitude: context.longitude,
             })
             .collect())
     }

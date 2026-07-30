@@ -7,6 +7,7 @@
 //! as `global`, and pass `--profile usa_midwest` on the CLI.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::application::{CalculateFertilityPlan, InspectScenario, ListLots, ListSupportedCrops, RegisterLot};
 use crate::core::domain::DomainError;
@@ -96,8 +97,16 @@ impl App {
 /// Swapping providers happens here and nowhere else: build a different
 /// `AgroclimaticRepository` and the use case is none the wiser.
 pub fn build_agroclimatic_repo() -> Option<Box<dyn AgroclimaticRepository>> {
-    let repo = NasaPowerRepo::new().ok()?;
-    Some(Box::new(CachedAgroclimaticRepo::new(Box::new(repo))))
+    Some(Box::new(CachedAgroclimaticRepo::new(Box::new(NasaPowerRepo::new().ok()?))))
+}
+
+/// The same provider, but as a cache a long-lived front-end can keep and
+/// share with a background thread. The TUI fills this off the render loop
+/// and reads it through [`crate::infra::PrewarmedAgroclimaticRepo`], which
+/// never blocks; a CLI run has nothing to share and uses the function
+/// above instead.
+pub fn build_climate_cache() -> Option<Arc<CachedAgroclimaticRepo>> {
+    Some(Arc::new(CachedAgroclimaticRepo::new(Box::new(NasaPowerRepo::new().ok()?))))
 }
 
 /// `agroclimatic` is `None` for an offline plan (`--no-climate`, or any

@@ -380,9 +380,30 @@ fn plan(frame: &mut Frame, area: Rect, tui: &Tui) {
     .header(header(
         tui,
         &["col_nutrient", "col_demand", "col_availability", "col_efficiency", "col_net", "col_balance", "col_soil_status", "col_dose"],
-    ))
-    .block(panel(title, !tui.focus_modules, tui));
-    frame.render_widget(table, area);
+    ));
+
+    let block = panel(title, !tui.focus_modules, tui);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [table_area, climate_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    frame.render_widget(table, table_area);
+    frame.render_widget(Paragraph::new(climate_line(tui, plan)), climate_area);
+}
+
+/// Which regime produced the N numbers above. The mineralization factor
+/// alone moves N availability by up to 3x between the climate-adjusted and
+/// the baseline value, so the plan must never leave the reader guessing —
+/// same rule the CLI output follows.
+fn climate_line<'a>(tui: &Tui, plan: &crate::core::domain::FertilityPlan) -> Line<'a> {
+    let label = match plan.climate.as_ref().and_then(|climate| climate.mean_temp_c) {
+        Some(temp) => format!("{} ({} {temp:.1} °C)", tui.i18n.t("plan_climate_adjusted"), tui.i18n.t("plan_mean_temp")),
+        None => tui.i18n.t("plan_climate_baseline").to_string(),
+    };
+    Line::from(vec![
+        Span::styled(format!(" {} ", tui.i18n.t("plan_mineralization")), tui.theme.muted()),
+        Span::styled(format!("{:.4} ", plan.mineralization_factor), tui.theme.accent()),
+        Span::styled(label, tui.theme.muted()),
+    ])
 }
 
 fn inspect(frame: &mut Frame, area: Rect, tui: &Tui) {
@@ -676,7 +697,7 @@ mod tests {
 
     #[test]
     fn every_screen_renders_at_both_densities() {
-        let mut tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME);
+        let mut tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
         tui.run_plan();
         assert!(tui.plan.is_some(), "LOT-001/corn/global should plan: {}", tui.message);
         tui.run_inspect();

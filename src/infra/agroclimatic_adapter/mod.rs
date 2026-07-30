@@ -10,5 +10,5 @@
 pub mod cache;
 pub mod nasa_power;
 
-pub use cache::CachedAgroclimaticRepo;
+pub use cache::{CachedAgroclimaticRepo, PrewarmedAgroclimaticRepo};
 pub use nasa_power::NasaPowerRepo;
