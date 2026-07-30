@@ -129,6 +129,21 @@ fn print_plan(plan: &crate::core::domain::FertilityPlan) {
             dose
         );
     }
+
+    if let Some(liming) = &plan.liming {
+        println!(
+            "Liming — base saturation {:.1}% (target {:.0}%); requirement: {:.2} t/ha by Al3+, {:.2} t/ha by base saturation -> recommended {:.2} t/ha",
+            liming.current_base_saturation_pct,
+            liming.target_base_saturation_pct,
+            liming.al_based_t_ha,
+            liming.base_saturation_based_t_ha,
+            liming.recommended_t_ha
+        );
+        match &liming.material {
+            Some(dose) => println!("  Material: {:.2} t/ha {}", dose.t_product_per_ha, dose.source_name),
+            None => println!("  Material: -"),
+        }
+    }
 }
 
 fn print_inspection(inspection: &crate::core::application::ScenarioInspection) {

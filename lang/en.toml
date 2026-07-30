@@ -1,0 +1,123 @@
+# English UI bundle. Keys are shared with lang/es.toml — both bundles must
+# carry exactly the same set (checked by `bundles_agree` in i18n.rs).
+
+app_subtitle = "agronomic toolkit"
+lang_en = "English"
+lang_es = "Español"
+
+# modules / navigation column
+modules = "Modules"
+module_home = "Home"
+module_plan = "Fertility plan"
+module_crops = "Crop catalog"
+module_inspect = "Inspect scenario"
+module_settings = "Settings"
+module_quit = "Quit"
+
+# panes
+workspace = "Workspace"
+system_status = "System status"
+
+# dashboard
+dashboard_title = "Active project"
+col_lot = "Lot"
+col_crop = "Crop"
+col_yield = "Yield goal"
+no_lots = "no curated lots found"
+quick_actions = "quick access"
+
+# status column
+st_profile = "profile"
+st_crops = "crop catalog"
+st_reference = "reference"
+st_curated = "curated"
+st_lot = "lot"
+st_texture = "texture"
+st_irrigation = "irrigation"
+st_ph = "pH"
+st_om = "organic matter"
+st_cec = "CEC"
+
+# crop catalog
+crops_title = "Crop catalog"
+crops_filter = "filter"
+col_crop_id = "Id"
+col_name = "Name"
+col_type = "Type"
+col_family = "Family"
+no_crops = "no crop matches the filter"
+
+# fertility plan
+plan_title = "Fertility plan"
+plan_yield_target = "yield goal"
+col_nutrient = "Nut."
+col_availability = "Supply"
+col_demand = "Demand"
+col_efficiency = "Eff."
+col_net = "To apply"
+col_balance = "Balance"
+col_soil_status = "Status"
+col_dose = "Product / dose"
+no_plan = "no plan yet — pick a lot and press Enter"
+soil_low = "low"
+soil_medium = "medium"
+soil_high = "high"
+
+# inspect
+inspect_title = "Scenario data"
+inspect_soil_tests = "Soil tests on file"
+inspect_provenance = "Reference provenance"
+inspect_micronutrients = "Micronutrients"
+inspect_not_planned = "not yet planned — reference data only, no use case wired"
+inspect_removal = "removal"
+inspect_no_removal = "no removal data for this crop/product"
+inspect_efficiency = "efficiency"
+inspect_critical = "critical levels"
+inspect_source = "source"
+inspect_year = "year"
+no_inspection = "nothing inspected yet — pick a lot and press Enter"
+col_value = "Value"
+col_unit = "Unit"
+col_method = "Method"
+
+# settings
+settings_title = "Settings"
+settings_language = "Language"
+settings_profile = "Reference profile"
+settings_data_root = "Data root"
+settings_reference_dir = "Reference directory"
+settings_curated_dir = "Curated directory"
+settings_read_only = "read-only"
+settings_hint = "Enter or h/l changes the selected value"
+
+# help overlay
+help_title = "Keybindings"
+help_move = "move selection"
+help_confirm = "confirm / drill down"
+help_back = "back / quit"
+help_panes = "cycle panes"
+help_help = "toggle this help"
+help_filter = "filter the list"
+help_change = "change value"
+help_quit = "quit"
+help_close = "press ? or Esc to close"
+
+# statusline
+mode_nav = "NAV"
+mode_filter = "FILTER"
+mode_help = "HELP"
+hint_dashboard = "j/k move · Tab pane · Enter open · ? help"
+hint_crops = "j/k move · / filter · Enter pick crop · Esc back"
+hint_plan = "j/k move · Tab pane · Esc back · ? help"
+hint_inspect = "j/k move · Tab pane · Esc back · ? help"
+hint_settings = "j/k move · h/l change · Esc back"
+
+# messages
+msg_ready = "ready"
+msg_plan_done = "plan calculated"
+msg_inspect_done = "scenario inspected"
+msg_crop_selected = "crop selected"
+msg_language_changed = "language changed"
+msg_profile_changed = "profile changed — reference data reloaded"
+err_no_lot = "no lot selected: curate a row in yield_targets.csv first"
+value_none = "—"

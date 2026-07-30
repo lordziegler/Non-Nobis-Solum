@@ -1,0 +1,4 @@
+source_id,name,cao_pct,mgo_pct,granulometric_efficiency_pct,restrictions
+ag_lime_caco3,Agricultural lime (CaCO3),50,2,80,illustrative composition (source=illustrative_estimate); not lab-verified; replace with real assay before field use
+dolomitic_lime,Dolomitic lime,30,18,90,illustrative composition (source=illustrative_estimate); not lab-verified; replace with real assay before field use
+quicklime_cao,Quicklime (CaO),90,2,95,illustrative composition (source=illustrative_estimate); fast-reacting; do not mix directly with ammonium fertilizers

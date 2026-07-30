@@ -135,6 +135,46 @@ pub struct NutrientPlanEntry {
     pub dose: Option<FertilizerDose>,
 }
 
+/// A liming material: neutralizing value comes from its CaO/MgO content,
+/// not from elemental Ca/Mg — kept separate from [`FertilizerSource`]
+/// because mixing the two catalogs would misuse elemental-nutrient
+/// percentages as neutralizing capacity.
+#[derive(Debug, Clone)]
+pub struct LimingMaterial {
+    pub source_id: String,
+    pub name: String,
+    pub cao_pct: f64,
+    pub mgo_pct: f64,
+    /// Fraction of the material fine enough to actually react in-field
+    /// (granulometric efficiency, "EG"), 0-100.
+    pub granulometric_efficiency_pct: f64,
+    pub restrictions: Vec<String>,
+}
+
+/// A liming material dose recommended to cover a [`LimingRecommendation`].
+#[derive(Debug, Clone)]
+pub struct LimingDose {
+    pub source_id: String,
+    pub source_name: String,
+    pub t_product_per_ha: f64,
+}
+
+/// Lime requirement for a field, computed only when an Al³⁺ soil test
+/// exists for the sample (the workflow's "encalamiento si aplica").
+#[derive(Debug, Clone)]
+pub struct LimingRecommendation {
+    /// CaCO3-equivalent requirement from exchangeable Al³⁺ toxicity.
+    pub al_based_t_ha: f64,
+    /// CaCO3-equivalent requirement from raising base saturation to target.
+    pub base_saturation_based_t_ha: f64,
+    /// The larger of the two — the conservative pick (see `ponytail:` note
+    /// at the call site for the real-world caveat this simplifies away).
+    pub recommended_t_ha: f64,
+    pub current_base_saturation_pct: f64,
+    pub target_base_saturation_pct: f64,
+    pub material: Option<LimingDose>,
+}
+
 /// Output of `CalculateFertilityPlan`: net nutrient requirements and
 /// recommended fertilizer doses for a field/crop/yield scenario.
 #[derive(Debug, Clone)]
@@ -144,4 +184,5 @@ pub struct FertilityPlan {
     pub crop_id: String,
     pub yield_target: YieldTarget,
     pub nutrient_results: Vec<NutrientPlanEntry>,
+    pub liming: Option<LimingRecommendation>,
 }

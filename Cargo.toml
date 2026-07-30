@@ -2,7 +2,21 @@
 name = "non_nobis_solum"
 version = "0.1.0"
 edition = "2021"
+# Two binaries now; keep bare `cargo run` meaning the CLI, as before.
+default-run = "non_nobis_solum"
 description = "Fertilization plan engine driven by soil analysis, crop removal coefficients, efficiency rules and fertilizer sources."
+
+[lib]
+name = "non_nobis_solum"
+path = "src/lib.rs"
+
+[[bin]]
+name = "non_nobis_solum"
+path = "src/main.rs"
+
+[[bin]]
+name = "nns-tui"
+path = "src/tui_main.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -11,3 +25,6 @@ toml = "0.8"
 serde_yaml = "0.9"
 clap = { version = "4", features = ["derive"] }
 thiserror = "1"
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+terminal-colorsaurus = "1.0.3"

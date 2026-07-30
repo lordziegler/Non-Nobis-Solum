@@ -1,12 +1,9 @@
-mod core;
-mod infra;
-
 use clap::Parser;
-use infra::cli_adapter::Cli;
+use non_nobis_solum::infra::cli_adapter::{self, Cli};
 
 fn main() {
     let cli = Cli::parse();
-    if let Err(e) = infra::cli_adapter::run(cli) {
+    if let Err(e) = cli_adapter::run(cli) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }

@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use crate::core::application::{CalculateFertilityPlan, InspectScenario, ListSupportedCrops};
 use crate::core::domain::DomainError;
 use crate::infra::{
-    CsvCriticalLevelsRepo, CsvCropCatalogRepo, CsvFertilizerSourcesRepo, CsvFieldContextRepo, CsvNutrientRemovalRepo,
-    CsvSoilTestsRepo, CsvYieldTargetsRepo, StaticConversionFactorsRepo, YamlEfficiencyRulesRepo,
+    CsvCriticalLevelsRepo, CsvCropCatalogRepo, CsvFertilizerSourcesRepo, CsvFieldContextRepo, CsvLimingMaterialsRepo,
+    CsvNutrientRemovalRepo, CsvSoilTestsRepo, CsvYieldTargetsRepo, StaticConversionFactorsRepo, StaticLimingRulesRepo,
+    YamlEfficiencyRulesRepo,
 };
 
 /// Resolves paths for a chosen reference profile plus the fixed curated
@@ -42,6 +43,70 @@ impl DataLayout {
     }
 }
 
+/// What a long-lived front-end (the TUI) holds instead of a single wired
+/// use case: the data root plus the profile currently selected. Use cases
+/// are rebuilt from [`App::layout`] on every action, because switching
+/// profile at runtime switches which reference files back them.
+pub struct App {
+    pub data_root: PathBuf,
+    pub profile: String,
+}
+
+/// Default composition for the TUI: the same `data/` root and `global`
+/// profile the CLI defaults to.
+pub fn build_app() -> App {
+    App { data_root: PathBuf::from("data"), profile: "global".to_string() }
+}
+
+/// One curated planning row: a lot, the crop planned on it, and its yield
+/// goal. TODO(gap): there is no `ListLots` use case in `core::ports`, so
+/// the TUI's lot selector is fed straight from the curated planning file
+/// here in the composition root rather than through a port.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LotRow {
+    pub field_id: String,
+    pub crop_id: String,
+    pub yield_value: f64,
+    pub yield_unit: String,
+}
+
+impl App {
+    pub fn layout(&self) -> DataLayout {
+        DataLayout::new(&self.data_root, &self.profile)
+    }
+
+    pub fn reference_dir(&self) -> PathBuf {
+        self.data_root.join("reference").join(&self.profile)
+    }
+
+    pub fn curated_dir(&self) -> PathBuf {
+        self.data_root.join("curated")
+    }
+
+    /// Reference profiles available on disk, so the front-end never has to
+    /// hardcode `global`/`andina_colombia`.
+    pub fn profiles(&self) -> Vec<String> {
+        let mut found: Vec<String> = std::fs::read_dir(self.data_root.join("reference"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        found
+    }
+
+    pub fn lots(&self) -> Result<Vec<LotRow>, DomainError> {
+        let mut reader = csv::Reader::from_path(self.curated_dir().join("yield_targets.csv"))
+            .map_err(|e| DomainError::DataSource(e.to_string()))?;
+        reader
+            .deserialize()
+            .collect::<Result<Vec<LotRow>, _>>()
+            .map_err(|e| DomainError::DataSource(e.to_string()))
+    }
+}
+
 pub fn build_calculate_fertility_plan(layout: &DataLayout) -> Result<CalculateFertilityPlan, DomainError> {
     Ok(CalculateFertilityPlan::new(
         Box::new(CsvSoilTestsRepo::new(layout.curated("soil_tests.csv"))),
@@ -52,6 +117,8 @@ pub fn build_calculate_fertility_plan(layout: &DataLayout) -> Result<CalculateFe
         Box::new(YamlEfficiencyRulesRepo::from_yaml_file(layout.reference("efficiency_rules.yaml"))?),
         Box::new(CsvCriticalLevelsRepo::new(layout.reference("critical_levels.csv"))),
         Box::new(CsvFertilizerSourcesRepo::new(layout.reference("fertilizer_sources.csv"))),
+        Box::new(StaticLimingRulesRepo::from_toml_file(layout.reference("liming_rules.toml"))?),
+        Box::new(CsvLimingMaterialsRepo::new(layout.reference("liming_materials.csv"))),
     ))
 }
 

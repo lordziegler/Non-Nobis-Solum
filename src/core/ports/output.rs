@@ -12,8 +12,8 @@
 //! scenario.
 
 use crate::core::domain::{
-    Crop, CriticalLevel, DomainError, FertilizerSource, FieldContext, IrrigationSystem, RemovalReference, SoilTest,
-    Texture, YieldTarget,
+    Crop, CriticalLevel, DomainError, FertilizerSource, FieldContext, IrrigationSystem, LimingMaterial,
+    RemovalReference, SoilTest, Texture, YieldTarget,
 };
 
 pub trait SoilTestRepository {
@@ -75,4 +75,18 @@ pub trait CriticalLevelsRepository {
 pub trait FertilizerSourceRepository {
     fn list_sources(&self) -> Result<Vec<FertilizerSource>, DomainError>;
     fn get_source(&self, source_id: &str) -> Result<FertilizerSource, DomainError>;
+}
+
+/// Literature constants for liming: how much CaCO3-equivalent one unit of
+/// exchangeable Al³⁺ requires, and what base saturation to aim for.
+pub trait LimingRulesRepository {
+    fn al_factor(&self, region: &str) -> Result<f64, DomainError>;
+    fn target_base_saturation_pct(&self, region: &str) -> Result<f64, DomainError>;
+}
+
+/// Commercial liming materials and their neutralizing composition
+/// (CaO/MgO, granulometric efficiency) — kept separate from
+/// `FertilizerSourceRepository` (see `LimingMaterial`'s doc comment).
+pub trait LimingMaterialRepository {
+    fn list_materials(&self) -> Result<Vec<LimingMaterial>, DomainError>;
 }

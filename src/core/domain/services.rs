@@ -53,6 +53,54 @@ pub fn dose_kg_product_ha(net_requirement_kg_ha: f64, nutrient_pct_in_source: f6
     net_requirement_kg_ha / (nutrient_pct_in_source / 100.0)
 }
 
+/// Effective cation exchange capacity (CICE), cmolc/kg: the sum of acid
+/// and base cations actually present, as opposed to `FieldContext`'s
+/// `cec_cmolc_kg` (CIC at pH 7, a different standard measurement — see
+/// the workflow reference for why the two are kept distinct).
+pub fn cation_exchange_capacity_effective(h: f64, al: f64, k: f64, mg: f64, ca: f64) -> f64 {
+    h + al + k + mg + ca
+}
+
+/// Current base saturation, as a percent of CICE held by K⁺/Mg²⁺/Ca²⁺.
+pub fn base_saturation_pct(k: f64, mg: f64, ca: f64, cice: f64) -> f64 {
+    if cice <= 0.0 {
+        return 0.0;
+    }
+    (k + mg + ca) / cice * 100.0
+}
+
+/// Lime requirement, in t CaCO3-eq/ha, from exchangeable Al³⁺ toxicity.
+/// `al_factor` is a literature constant (e.g. ~1.5 for tropical soils —
+/// see `LimingRulesRepository`), not derived here.
+pub fn lime_requirement_from_aluminum_t_ha(al_cmolc_kg: f64, al_factor: f64) -> f64 {
+    (al_factor * al_cmolc_kg).max(0.0)
+}
+
+/// Lime requirement, in t CaCO3-eq/ha, to raise base saturation from its
+/// current value to `target_base_saturation_pct`. Never negative — a soil
+/// already at or above target needs no lime by this method.
+pub fn lime_requirement_from_base_saturation_t_ha(cic_cmolc_kg: f64, current_base_saturation_pct: f64, target_base_saturation_pct: f64) -> f64 {
+    (cic_cmolc_kg * (target_base_saturation_pct - current_base_saturation_pct) / 100.0).max(0.0)
+}
+
+/// Neutralizing value (EQ) of a liming material, as % CaCO3-equivalent,
+/// from its CaO/MgO content.
+pub fn neutralizing_value_pct(cao_pct: f64, mgo_pct: f64) -> f64 {
+    cao_pct * 1.79 + mgo_pct * 2.48
+}
+
+/// PRNT (relative total neutralizing power): a material's neutralizing
+/// value discounted by how much of it is fine enough to actually react.
+pub fn prnt(neutralizing_value_pct: f64, granulometric_efficiency_pct: f64) -> f64 {
+    neutralizing_value_pct * granulometric_efficiency_pct / 100.0
+}
+
+/// Product dose, in t of liming material per ha, needed to deliver
+/// `caco3_eq_required_t_ha` given a material at `prnt_pct` PRNT.
+pub fn lime_material_dose_t_ha(caco3_eq_required_t_ha: f64, prnt_pct: f64) -> f64 {
+    caco3_eq_required_t_ha / (prnt_pct / 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +141,58 @@ mod tests {
         // (LOT-001's numbers) -> 62.4 kg N/ha, matching n.py's n_asimilable.
         let weight = soil_weight_kg_ha(1.3, 0.2);
         assert!((nitrogen_available_kg_ha(3.2, 0.015, weight) - 62.4).abs() < 0.01);
+    }
+
+    #[test]
+    fn cice_sums_all_cations() {
+        // H 0.3 + Al 1.5 + K 0.18 + Mg 0.8 + Ca 3.0 -> 5.78 cmolc/kg.
+        assert!((cation_exchange_capacity_effective(0.3, 1.5, 0.18, 0.8, 3.0) - 5.78).abs() < 1e-9);
+    }
+
+    #[test]
+    fn base_saturation_is_fraction_of_cice() {
+        // (0.18+0.8+3.0)/5.78 * 100 -> ~68.86%.
+        assert!((base_saturation_pct(0.18, 0.8, 3.0, 5.78) - 68.858).abs() < 0.01);
+    }
+
+    #[test]
+    fn base_saturation_is_zero_when_cice_is_zero() {
+        assert_eq!(base_saturation_pct(0.0, 0.0, 0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn lime_from_aluminum_scales_by_factor() {
+        // Al 1.5 cmolc/kg, Kamprath factor 1.5 -> 2.25 t CaCO3-eq/ha.
+        assert!((lime_requirement_from_aluminum_t_ha(1.5, 1.5) - 2.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lime_from_base_saturation_is_never_negative() {
+        // Already above target -> no lime needed by this method.
+        assert_eq!(lime_requirement_from_base_saturation_t_ha(18.0, 90.0, 80.0), 0.0);
+    }
+
+    #[test]
+    fn lime_from_base_saturation_scales_by_gap() {
+        // CIC 18.0, current SB 68.858%, target 80% -> 18*(80-68.858)/100 ~ 2.006 t/ha.
+        assert!((lime_requirement_from_base_saturation_t_ha(18.0, 68.858, 80.0) - 2.006).abs() < 0.01);
+    }
+
+    #[test]
+    fn neutralizing_value_from_oxide_content() {
+        // CaO 30%, MgO 18% -> 30*1.79 + 18*2.48 -> 98.34.
+        assert!((neutralizing_value_pct(30.0, 18.0) - 98.34).abs() < 1e-9);
+    }
+
+    #[test]
+    fn prnt_discounts_by_granulometric_efficiency() {
+        // EQ 97.14%, EG 90% -> 87.426.
+        assert!((prnt(97.14, 90.0) - 87.426).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lime_material_dose_scales_by_prnt() {
+        // 2.25 t CaCO3-eq/ha needed, material at 87.426% PRNT -> ~2.574 t/ha.
+        assert!((lime_material_dose_t_ha(2.25, 87.426) - 2.574).abs() < 0.01);
     }
 }

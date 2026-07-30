@@ -19,6 +19,16 @@ pub enum Nutrient {
     Cu,
     B,
     Mo,
+    /// Exchangeable aluminum (Al³⁺), cmolc/kg. Not a plant nutrient — a
+    /// soil-acidity indicator, reused via the same soil-test pipeline as
+    /// Ca/Mg/K because it's reported by the same lab panel in the same
+    /// unit. Feeds `services::` liming calculations only; never appears
+    /// in `MACRONUTRIENTS`.
+    Al,
+    /// Exchangeable hydrogen (H⁺), cmolc/kg. Same rationale as `Al`;
+    /// optional in practice (many labs report Al alone), so callers treat
+    /// a missing `H` test as 0.
+    H,
 }
 
 impl Nutrient {
@@ -39,6 +49,8 @@ impl Nutrient {
             Nutrient::Cu => "Cu",
             Nutrient::B => "B",
             Nutrient::Mo => "Mo",
+            Nutrient::Al => "Al",
+            Nutrient::H => "H",
         }
     }
 }
@@ -60,6 +72,8 @@ impl FromStr for Nutrient {
             "Cu" => Ok(Nutrient::Cu),
             "B" => Ok(Nutrient::B),
             "Mo" => Ok(Nutrient::Mo),
+            "Al" => Ok(Nutrient::Al),
+            "H" => Ok(Nutrient::H),
             other => Err(DomainError::InvalidInput(format!("unknown nutrient id: {other}"))),
         }
     }

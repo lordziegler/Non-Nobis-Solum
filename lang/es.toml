@@ -1,0 +1,123 @@
+# Spanish UI bundle. Keys are shared with lang/en.toml — both bundles must
+# carry exactly the same set (checked by `bundles_agree` in i18n.rs).
+
+app_subtitle = "toolkit agronómico"
+lang_en = "English"
+lang_es = "Español"
+
+# modules / navigation column
+modules = "Módulos"
+module_home = "Inicio"
+module_plan = "Fertilización"
+module_crops = "Cultivos"
+module_inspect = "Inspeccionar"
+module_settings = "Ajustes"
+module_quit = "Salir"
+
+# panes
+workspace = "Workspace"
+system_status = "Estado del sistema"
+
+# dashboard
+dashboard_title = "Proyecto activo"
+col_lot = "Lote"
+col_crop = "Cultivo"
+col_yield = "Rend. objetivo"
+no_lots = "no hay lotes curados"
+quick_actions = "acceso rápido"
+
+# status column
+st_profile = "perfil"
+st_crops = "base de cultivos"
+st_reference = "referencia"
+st_curated = "curados"
+st_lot = "lote"
+st_texture = "textura"
+st_irrigation = "riego"
+st_ph = "pH"
+st_om = "materia orgánica"
+st_cec = "CIC"
+
+# crop catalog
+crops_title = "Catálogo de cultivos"
+crops_filter = "filtro"
+col_crop_id = "Id"
+col_name = "Nombre"
+col_type = "Tipo"
+col_family = "Familia"
+no_crops = "ningún cultivo coincide con el filtro"
+
+# fertility plan
+plan_title = "Plan de fertilización"
+plan_yield_target = "rend. objetivo"
+col_nutrient = "Nut."
+col_availability = "Aporte"
+col_demand = "Requiere"
+col_efficiency = "Efic."
+col_net = "A aplicar"
+col_balance = "Balance"
+col_soil_status = "Estado"
+col_dose = "Fuente / dosis"
+no_plan = "aún sin plan — elige un lote y pulsa Enter"
+soil_low = "bajo"
+soil_medium = "medio"
+soil_high = "alto"
+
+# inspect
+inspect_title = "Datos del escenario"
+inspect_soil_tests = "Análisis de suelo en archivo"
+inspect_provenance = "Procedencia de la referencia"
+inspect_micronutrients = "Micronutrientes"
+inspect_not_planned = "aún no planificado — solo datos de referencia, sin caso de uso"
+inspect_removal = "extracción"
+inspect_no_removal = "sin datos de extracción para este cultivo/producto"
+inspect_efficiency = "eficiencia"
+inspect_critical = "niveles críticos"
+inspect_source = "fuente"
+inspect_year = "año"
+no_inspection = "aún sin inspección — elige un lote y pulsa Enter"
+col_value = "Valor"
+col_unit = "Unidad"
+col_method = "Método"
+
+# settings
+settings_title = "Ajustes"
+settings_language = "Idioma"
+settings_profile = "Perfil de referencia"
+settings_data_root = "Raíz de datos"
+settings_reference_dir = "Directorio de referencia"
+settings_curated_dir = "Directorio curado"
+settings_read_only = "solo lectura"
+settings_hint = "Enter o h/l cambia el valor seleccionado"
+
+# help overlay
+help_title = "Atajos de teclado"
+help_move = "mover selección"
+help_confirm = "confirmar / entrar"
+help_back = "volver / salir"
+help_panes = "cambiar de panel"
+help_help = "mostrar u ocultar esta ayuda"
+help_filter = "filtrar la lista"
+help_change = "cambiar valor"
+help_quit = "salir"
+help_close = "pulsa ? o Esc para cerrar"
+
+# statusline
+mode_nav = "NAV"
+mode_filter = "FILTRO"
+mode_help = "AYUDA"
+hint_dashboard = "j/k mover · Tab panel · Enter abrir · ? ayuda"
+hint_crops = "j/k mover · / filtrar · Enter elegir cultivo · Esc volver"
+hint_plan = "j/k mover · Tab panel · Esc volver · ? ayuda"
+hint_inspect = "j/k mover · Tab panel · Esc volver · ? ayuda"
+hint_settings = "j/k mover · h/l cambiar · Esc volver"
+
+# messages
+msg_ready = "listo"
+msg_plan_done = "plan calculado"
+msg_inspect_done = "escenario inspeccionado"
+msg_crop_selected = "cultivo seleccionado"
+msg_language_changed = "idioma cambiado"
+msg_profile_changed = "perfil cambiado — datos de referencia recargados"
+err_no_lot = "ningún lote seleccionado: cura primero una fila en yield_targets.csv"
+value_none = "—"

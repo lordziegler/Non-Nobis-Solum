@@ -1,9 +1,12 @@
 use super::scenario::FertilityScenario;
-use crate::core::domain::{services, DomainError, FertilityPlan, FertilizerDose, Nutrient, NutrientPlanEntry};
+use crate::core::domain::{
+    services, DomainError, FertilityPlan, FertilizerDose, LimingDose, LimingRecommendation, Nutrient, NutrientPlanEntry,
+    SoilTest,
+};
 use crate::core::ports::{
-    ConversionFactorsRepository, CriticalLevelsRepository, EfficiencyRulesRepository, FertilizerSourceRepository,
-    FertilityCalculatorPort, FieldContextRepository, NutrientRemovalRepository, SoilTestRepository,
-    YieldTargetRepository,
+    ConversionFactorsRepository, CriticalLevelsRepository, EfficiencyRulesRepository, FertilityCalculatorPort,
+    FertilizerSourceRepository, FieldContextRepository, LimingMaterialRepository, LimingRulesRepository,
+    NutrientRemovalRepository, SoilTestRepository, YieldTargetRepository,
 };
 
 /// Fraction of total soil N assumed to mineralize annually. Matches the
@@ -24,6 +27,8 @@ pub struct CalculateFertilityPlan {
     efficiency_rules: Box<dyn EfficiencyRulesRepository>,
     critical_levels: Box<dyn CriticalLevelsRepository>,
     fertilizer_sources: Box<dyn FertilizerSourceRepository>,
+    liming_rules: Box<dyn LimingRulesRepository>,
+    liming_materials: Box<dyn LimingMaterialRepository>,
 }
 
 impl CalculateFertilityPlan {
@@ -37,6 +42,8 @@ impl CalculateFertilityPlan {
         efficiency_rules: Box<dyn EfficiencyRulesRepository>,
         critical_levels: Box<dyn CriticalLevelsRepository>,
         fertilizer_sources: Box<dyn FertilizerSourceRepository>,
+        liming_rules: Box<dyn LimingRulesRepository>,
+        liming_materials: Box<dyn LimingMaterialRepository>,
     ) -> Self {
         Self {
             soil_tests,
@@ -47,6 +54,8 @@ impl CalculateFertilityPlan {
             efficiency_rules,
             critical_levels,
             fertilizer_sources,
+            liming_rules,
+            liming_materials,
         }
     }
 
@@ -62,6 +71,71 @@ impl CalculateFertilityPlan {
             source_id: source.source_id.clone(),
             source_name: source.name.clone(),
             kg_product_per_ha: services::dose_kg_product_ha(net_kg_ha, pct),
+        }))
+    }
+
+    /// `t_ha` is a CaCO3-equivalent requirement; picks the material with
+    /// the highest PRNT, same "highest wins" heuristic as `best_source_for`.
+    fn best_liming_material_for(&self, t_ha: f64) -> Result<Option<LimingDose>, DomainError> {
+        let materials = self.liming_materials.list_materials()?;
+        let best = materials
+            .iter()
+            .map(|m| {
+                let eq = services::neutralizing_value_pct(m.cao_pct, m.mgo_pct);
+                (m, services::prnt(eq, m.granulometric_efficiency_pct))
+            })
+            .filter(|(_, prnt)| *prnt > 0.0)
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+
+        Ok(best.map(|(material, prnt)| LimingDose {
+            source_id: material.source_id.clone(),
+            source_name: material.name.clone(),
+            t_product_per_ha: services::lime_material_dose_t_ha(t_ha, prnt),
+        }))
+    }
+
+    /// Lime requirement, computed only when the sample has an Al³⁺ test
+    /// (the workflow's "encalamiento si aplica"). K⁺/Mg²⁺/Ca²⁺/H⁺ are read
+    /// as their raw cmolc/kg lab values, not the kg/ha availability used
+    /// elsewhere in the plan — the liming formulas operate directly in
+    /// cmolc/kg (assumes these tests are reported in that unit, same as
+    /// every soil test currently in `data/curated/`).
+    fn calculate_liming(&self, soil_tests: &[SoilTest], cic_cmolc_kg: f64, region: &str) -> Result<Option<LimingRecommendation>, DomainError> {
+        let Some(al_test) = soil_tests.iter().find(|t| t.nutrient == Nutrient::Al) else {
+            return Ok(None);
+        };
+        let cmolc_value_of = |nutrient: Nutrient| soil_tests.iter().find(|t| t.nutrient == nutrient).map(|t| t.value).unwrap_or(0.0);
+
+        let al = al_test.value;
+        let h = cmolc_value_of(Nutrient::H);
+        let k = cmolc_value_of(Nutrient::K);
+        let mg = cmolc_value_of(Nutrient::Mg);
+        let ca = cmolc_value_of(Nutrient::Ca);
+
+        let cice = services::cation_exchange_capacity_effective(h, al, k, mg, ca);
+        let current_base_saturation_pct = services::base_saturation_pct(k, mg, ca, cice);
+
+        let al_factor = self.liming_rules.al_factor(region)?;
+        let target_base_saturation_pct = self.liming_rules.target_base_saturation_pct(region)?;
+
+        let al_based_t_ha = services::lime_requirement_from_aluminum_t_ha(al, al_factor);
+        let base_saturation_based_t_ha =
+            services::lime_requirement_from_base_saturation_t_ha(cic_cmolc_kg, current_base_saturation_pct, target_base_saturation_pct);
+        // ponytail: "take the max of both methods" is a conservative stand-in
+        // for the real rule (use the Al method only once Al saturation
+        // crosses a crop-specific toxicity threshold). Revisit once
+        // per-crop Al tolerance data exists.
+        let recommended_t_ha = al_based_t_ha.max(base_saturation_based_t_ha);
+
+        let material = if recommended_t_ha > 0.0 { self.best_liming_material_for(recommended_t_ha)? } else { None };
+
+        Ok(Some(LimingRecommendation {
+            al_based_t_ha,
+            base_saturation_based_t_ha,
+            recommended_t_ha,
+            current_base_saturation_pct,
+            target_base_saturation_pct,
+            material,
         }))
     }
 }
@@ -146,12 +220,15 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
             });
         }
 
+        let liming = self.calculate_liming(&soil_tests, field_context.cec_cmolc_kg, &field_context.region)?;
+
         Ok(FertilityPlan {
             field_id: scenario.field_id,
             sample_id: scenario.sample_id,
             crop_id: scenario.crop_id,
             yield_target,
             nutrient_results,
+            liming,
         })
     }
 }
