@@ -4,16 +4,13 @@
 //!
 //! Hexagonal boundary notes:
 //!
-//! - Every calculation goes through the input ports (`FertilityCalculatorPort`,
-//!   `ListCropsPort`) and every path comes from `bootstrap`.
+//! - Every operation goes through an input port (`FertilityCalculatorPort`,
+//!   `ListCropsPort`, `ListLotsPort`, `InspectScenarioPort`,
+//!   `RegisterLotPort`) and every path comes from `bootstrap`.
 //! - Domain types *are* imported, but only the ones those port signatures
 //!   already hand back (`FertilityPlan`, `Crop`, …): rendering a port's
 //!   return value requires naming its type. No domain service, constructor
 //!   or agronomic rule is used here.
-//! - TODO(gap): `InspectScenario` has no trait in `core::ports::input`, so
-//!   the inspect screen calls its inherent `inspect()` method. Add
-//!   `InspectScenarioPort` there and this call site becomes port-only like
-//!   the other two.
 
 pub mod i18n;
 pub mod theme;
@@ -24,7 +21,9 @@ use ratatui::DefaultTerminal;
 
 use crate::core::application::{FertilityScenario, LotRegistration, LotSummary, ScenarioInspection, SoilTestEntry};
 use crate::core::domain::{Crop, DomainError, FertilityPlan, YieldTarget};
-use crate::core::ports::{FertilityCalculatorPort, ListCropsPort, ListLotsPort, RegisterLotPort};
+use crate::core::ports::{
+    FertilityCalculatorPort, InspectScenarioPort, ListCropsPort, ListLotsPort, RegisterLotPort,
+};
 use crate::infra::bootstrap::{self, App as Composition};
 
 use i18n::{I18n, Language};

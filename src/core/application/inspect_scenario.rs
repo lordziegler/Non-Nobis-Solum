@@ -1,8 +1,8 @@
 use super::scenario::FertilityScenario;
 use crate::core::domain::{CriticalLevel, DomainError, FieldContext, Nutrient, RemovalReference, SoilTest, YieldTarget};
 use crate::core::ports::{
-    CriticalLevelsRepository, EfficiencyRulesRepository, FieldContextRepository, NutrientRemovalRepository,
-    SoilTestRepository, YieldTargetRepository,
+    CriticalLevelsRepository, EfficiencyRulesRepository, FieldContextRepository, InspectScenarioPort,
+    NutrientRemovalRepository, SoilTestRepository, YieldTargetRepository,
 };
 
 /// Per-nutrient provenance shown by `InspectScenario`: where each number
@@ -53,8 +53,10 @@ impl InspectScenario {
             critical_levels,
         }
     }
+}
 
-    pub fn inspect(&self, scenario: &FertilityScenario) -> Result<ScenarioInspection, DomainError> {
+impl InspectScenarioPort for InspectScenario {
+    fn inspect(&self, scenario: &FertilityScenario) -> Result<ScenarioInspection, DomainError> {
         let field_context = self.field_context.get_context_by_field_id(&scenario.field_id)?;
         let soil_tests = self.soil_tests.get_tests_by_sample_id(&scenario.sample_id)?;
         let yield_target = match scenario.yield_override.clone() {

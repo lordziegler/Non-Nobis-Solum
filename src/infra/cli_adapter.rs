@@ -8,7 +8,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::core::application::FertilityScenario;
 use crate::core::domain::{DomainError, SoilStatus, YieldTarget};
-use crate::core::ports::{FertilityCalculatorPort, ListCropsPort};
+use crate::core::ports::{FertilityCalculatorPort, InspectScenarioPort, ListCropsPort};
 use crate::infra::bootstrap::{self, DataLayout};
 
 #[derive(Parser)]

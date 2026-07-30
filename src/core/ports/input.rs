@@ -1,6 +1,6 @@
 //! Input ports: what the outside world (CLI, TUI, ...) can ask the core to do.
 
-use crate::core::application::{FertilityScenario, LotRegistration, LotSummary, SoilTestEntry};
+use crate::core::application::{FertilityScenario, LotRegistration, LotSummary, ScenarioInspection, SoilTestEntry};
 use crate::core::domain::{Crop, DomainError, FertilityPlan};
 
 pub trait FertilityCalculatorPort {
@@ -13,6 +13,10 @@ pub trait ListCropsPort {
 
 pub trait ListLotsPort {
     fn list_lots(&self) -> Result<Vec<LotSummary>, DomainError>;
+}
+
+pub trait InspectScenarioPort {
+    fn inspect(&self, scenario: &FertilityScenario) -> Result<ScenarioInspection, DomainError>;
 }
 
 /// The only input port that changes anything on disk. Both methods take

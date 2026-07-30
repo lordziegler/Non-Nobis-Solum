@@ -73,11 +73,7 @@ impl CalculateFertilityPlan {
 
     fn best_source_for(&self, nutrient: Nutrient, net_kg_ha: f64) -> Result<Option<FertilizerDose>, DomainError> {
         let sources = self.fertilizer_sources.list_sources()?;
-        let best = sources
-            .iter()
-            .filter_map(|s| s.pct_of(nutrient).map(|pct| (s, pct)))
-            .filter(|(_, pct)| *pct > 0.0)
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+        let best = highest_rated(sources.iter().filter_map(|s| s.pct_of(nutrient).map(|pct| (s, pct))));
 
         Ok(best.map(|(source, pct)| FertilizerDose {
             source_id: source.source_id.clone(),
@@ -90,14 +86,10 @@ impl CalculateFertilityPlan {
     /// the highest PRNT, same "highest wins" heuristic as `best_source_for`.
     fn best_liming_material_for(&self, t_ha: f64) -> Result<Option<LimingDose>, DomainError> {
         let materials = self.liming_materials.list_materials()?;
-        let best = materials
-            .iter()
-            .map(|m| {
-                let eq = services::neutralizing_value_pct(m.cao_pct, m.mgo_pct);
-                (m, services::prnt(eq, m.granulometric_efficiency_pct))
-            })
-            .filter(|(_, prnt)| *prnt > 0.0)
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+        let best = highest_rated(materials.iter().map(|m| {
+            let eq = services::neutralizing_value_pct(m.cao_pct, m.mgo_pct);
+            (m, services::prnt(eq, m.granulometric_efficiency_pct))
+        }));
 
         Ok(best.map(|(material, prnt)| LimingDose {
             source_id: material.source_id.clone(),
@@ -150,6 +142,19 @@ impl CalculateFertilityPlan {
             material,
         }))
     }
+}
+
+/// The "highest number wins" pick shared by the fertilizer-source and
+/// liming-material heuristics.
+///
+/// `> 0.0` is false for `NaN`, so a catalog row with an unparseable
+/// composition drops out here instead of ordering the comparison — which
+/// is what made the old `partial_cmp(..).unwrap()` a panic waiting for a
+/// bad CSV row. `total_cmp` then needs no fallible comparison at all.
+fn highest_rated<'a, T>(rated: impl Iterator<Item = (&'a T, f64)>) -> Option<(&'a T, f64)> {
+    rated
+        .filter(|(_, rating)| *rating > 0.0)
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
 }
 
 impl FertilityCalculatorPort for CalculateFertilityPlan {
@@ -268,5 +273,28 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
             mineralization_factor,
             climate,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_highest_rating_wins_and_a_nan_never_does() {
+        let catalog = [("urea", 46.0), ("broken", f64::NAN), ("map", 26.6), ("filler", 0.0)];
+        let rated = catalog.iter().map(|(name, rating)| (name, *rating));
+
+        let best = highest_rated(rated).expect("a usable row exists");
+
+        assert_eq!(*best.0, "urea");
+        assert_eq!(best.1, 46.0);
+    }
+
+    #[test]
+    fn a_catalog_with_nothing_usable_yields_no_dose() {
+        let catalog = [("broken", f64::NAN), ("filler", 0.0), ("negative", -3.0)];
+
+        assert!(highest_rated(catalog.iter().map(|(name, rating)| (name, *rating))).is_none());
     }
 }
