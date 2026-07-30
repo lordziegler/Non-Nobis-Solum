@@ -37,20 +37,32 @@ impl SoilTestRepository for CsvSoilTestsRepo {
         let mut reader = csv::Reader::from_path(&self.path)
             .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
 
-        let mut tests = Vec::new();
+        let mut tests: Vec<SoilTest> = Vec::new();
         for row in reader.deserialize::<SoilTestRow>() {
             let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
             if row.sample_id != sample_id {
                 continue;
             }
-            tests.push(SoilTest {
+            let test = SoilTest {
                 sample_id: row.sample_id,
                 nutrient: Nutrient::from_str(&row.nutrient_id)?,
                 value: row.value,
                 unit: row.unit,
                 method: row.method_id,
                 layer: Depth { from_cm: row.depth_from_cm, to_cm: row.depth_to_cm },
-            });
+            };
+            // This file is append-only: `CuratedDataWriter` never rewrites
+            // a row, so a corrected lab value arrives as a *second* row for
+            // the same nutrient at the same depth. The later row is the
+            // correction and wins — otherwise the correction would be
+            // written, accepted, and then silently ignored by every plan.
+            //
+            // Keyed on the depth as well as the nutrient: P at 0-20 and P
+            // at 20-40 are two different measurements, not a correction.
+            match tests.iter_mut().find(|t| t.nutrient == test.nutrient && t.layer == test.layer) {
+                Some(superseded) => *superseded = test,
+                None => tests.push(test),
+            }
         }
 
         if tests.is_empty() {

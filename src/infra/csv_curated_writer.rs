@@ -227,6 +227,59 @@ mod tests {
         assert_eq!(read[0].layer.to_cm, 20.0);
     }
 
+    /// The file is append-only, so correcting a lab value means writing a
+    /// second row for the same nutrient. If the reader kept the first one,
+    /// the correction would be accepted and then silently ignored by every
+    /// plan — the worst failure mode this tool has.
+    #[test]
+    fn a_corrected_lab_value_supersedes_the_one_it_replaces() {
+        use crate::core::domain::{Depth, Nutrient, SoilTest};
+        use crate::core::ports::SoilTestRepository;
+
+        let sandbox = Sandbox::new("correction");
+        let reading = |value: f64, to_cm: f64| SoilTest {
+            sample_id: "LOT-001".to_string(),
+            nutrient: Nutrient::P,
+            value,
+            unit: "mg_per_kg".to_string(),
+            method: "Olsen".to_string(),
+            layer: Depth { from_cm: 0.0, to_cm },
+        };
+        // LOT-001 ships with P = 18 at 0-20 cm. Correct it, then add a
+        // genuinely different measurement at a deeper layer.
+        sandbox.writer().save_soil_tests(&[reading(2.0, 20.0)]).expect("correction");
+        sandbox.writer().save_soil_tests(&[reading(31.0, 40.0)]).expect("deeper layer");
+
+        let read = CsvSoilTestsRepo::new(sandbox.dir.join("soil_tests.csv"))
+            .get_tests_by_sample_id("LOT-001")
+            .expect("read back");
+        let at = |to_cm: f64| {
+            read.iter()
+                .find(|t| t.nutrient == Nutrient::P && t.layer.to_cm == to_cm)
+                .map(|t| t.value)
+        };
+        assert_eq!(at(20.0), Some(2.0), "the later row for the same depth must win");
+        assert_eq!(at(40.0), Some(31.0), "a different depth is a new measurement, not a correction");
+        assert_eq!(read.iter().filter(|t| t.nutrient == Nutrient::P).count(), 2);
+    }
+
+    #[test]
+    fn a_revised_yield_goal_supersedes_the_one_it_replaces() {
+        let sandbox = Sandbox::new("revised_goal");
+        let repo = CsvYieldTargetsRepo::new(sandbox.dir.join("yield_targets.csv"));
+        // LOT-001/corn ships at 9.5 t_ha.
+        sandbox
+            .writer()
+            .save_yield_target("LOT-001", "corn", &YieldTarget { value: 11.0, unit: "t_ha".to_string() })
+            .expect("write");
+
+        assert_eq!(repo.get_yield_target("LOT-001", "corn").expect("read back").value, 11.0);
+        // And the lot picker must not offer the goal the planner won't use.
+        let listed = repo.list_targets().expect("list");
+        assert_eq!(listed.len(), 2, "the revision replaces the row, it doesn't add a lot");
+        assert_eq!(listed.iter().find(|t| t.crop_id == "corn").expect("corn").target.value, 11.0);
+    }
+
     #[test]
     fn a_yield_target_reads_back_through_its_own_repository() {
         let sandbox = Sandbox::new("target");

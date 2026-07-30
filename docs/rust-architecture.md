@@ -65,9 +65,17 @@ The CLI, which is allowed to wait, keeps the blocking wiring.
 disk, and `RegisterLot` the only use case that holds one. Two rules keep
 it boring:
 
-- **Append-only.** Creating a lot, a sample or a planning row is all the
-  write access anything needs today. Editing an existing row is a
-  read-modify-rename contract; it can be added when something asks.
+- **Append-only, and the last row wins.** Creating a lot, a sample or a
+  planning row is all the write access anything needs today. Editing an
+  existing row is a read-modify-rename contract; it can be added when
+  something asks. Until then the two curated readers that can see a
+  repeated key collapse it themselves — `CsvSoilTestsRepo` keyed on
+  (nutrient, depth), `CsvYieldTargetsRepo` on (field, crop) — because a
+  correction can only arrive as a second row, and a reader that kept the
+  first would let the app accept a corrected lab value and then silently
+  plan on the stale one. A duplicate `field_id` is the exception: it is
+  refused up front by `RegisterLot` rather than collapsed, since a second
+  lot row means a mistake, not a revision.
 - **Validation belongs to the use case, not the adapter and not the
   front-end.** `LotRegistration`/`SoilTestEntry` carry raw text for every
   field, including numbers, so a CLI, a TUI or an HTTP handler all reach
@@ -227,8 +235,10 @@ one row at a time without touching code.
   the climatology up. Both states are labelled on screen.
 - Nothing is exported: no plan file, no plan history, and TUI settings
   (language, profile) still reset on exit.
-- The write path only appends. There is no way to correct a curated row
-  from the app.
+- The write path only appends. A correction is a second row that
+  supersedes the first on read (see "The write path"), so the values the
+  app uses are always right, but the file grows and the superseded rows
+  stay visible in it. Deleting a lot, or a sample, is not possible at all.
 
 ## Tests
 

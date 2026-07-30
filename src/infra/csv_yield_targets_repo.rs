@@ -32,32 +32,38 @@ impl YieldTargetRepository for CsvYieldTargetsRepo {
         let mut reader = csv::Reader::from_path(&self.path)
             .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
 
+        // Last row wins, same append-only rule as `CsvSoilTestsRepo` — a
+        // revised goal for a lot/crop pair is appended, not overwritten.
+        let mut found = None;
         for row in reader.deserialize::<YieldTargetRow>() {
             let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
             if row.field_id == field_id && row.crop_id == crop_id {
-                return Ok(YieldTarget { value: row.yield_value, unit: row.yield_unit });
+                found = Some(YieldTarget { value: row.yield_value, unit: row.yield_unit });
             }
         }
 
-        Err(DomainError::NotFound(format!(
-            "no yield target for field_id={field_id} crop_id={crop_id}"
-        )))
+        found.ok_or_else(|| DomainError::NotFound(format!("no yield target for field_id={field_id} crop_id={crop_id}")))
     }
 
     fn list_targets(&self) -> Result<Vec<LotYieldTarget>, DomainError> {
-        let reader = csv::Reader::from_path(&self.path)
+        let mut reader = csv::Reader::from_path(&self.path)
             .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
 
-        reader
-            .into_deserialize::<YieldTargetRow>()
-            .map(|row| {
-                let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
-                Ok(LotYieldTarget {
-                    field_id: row.field_id,
-                    crop_id: row.crop_id,
-                    target: YieldTarget { value: row.yield_value, unit: row.yield_unit },
-                })
-            })
-            .collect()
+        // Same last-wins collapse as `get_yield_target`, so a front-end
+        // listing the lots can't show a goal the planner won't use.
+        let mut targets: Vec<LotYieldTarget> = Vec::new();
+        for row in reader.deserialize::<YieldTargetRow>() {
+            let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
+            let target = LotYieldTarget {
+                field_id: row.field_id,
+                crop_id: row.crop_id,
+                target: YieldTarget { value: row.yield_value, unit: row.yield_unit },
+            };
+            match targets.iter_mut().find(|t| t.field_id == target.field_id && t.crop_id == target.crop_id) {
+                Some(superseded) => *superseded = target,
+                None => targets.push(target),
+            }
+        }
+        Ok(targets)
     }
 }
