@@ -11,7 +11,7 @@ use ratatui::Frame;
 use super::i18n::Language;
 use super::{Screen, Tui, MODULES, SETTINGS, UNPLANNED_MICRONUTRIENTS};
 use crate::core::application::LotSummary;
-use crate::core::domain::{IrrigationSystem, SoilStatus, Texture};
+use crate::core::domain::SoilStatus;
 
 /// Below this width the status column is dropped rather than squeezed —
 /// an 80x24 terminal keeps modules + workspace intact.
@@ -36,6 +36,9 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
         status_pane(frame, *area, tui);
     }
 
+    if tui.picker.is_some() {
+        picker_overlay(frame, tui);
+    }
     if tui.help {
         help_overlay(frame, tui);
     }
@@ -176,17 +179,6 @@ fn workspace(frame: &mut Frame, area: Rect, tui: &Tui) {
     }
 }
 
-/// Accepted values for the closed-set fields, read straight off the domain
-/// enums so this hint can never drift from what `from_str` accepts.
-fn accepted_values(field: &str) -> Option<String> {
-    let values = match field {
-        "form_texture" => Texture::ALL.iter().map(Texture::to_string).collect::<Vec<_>>(),
-        "form_irrigation" => IrrigationSystem::ALL.iter().map(IrrigationSystem::to_string).collect(),
-        _ => return None,
-    };
-    Some(values.join(" · "))
-}
-
 fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     let title = if tui.screen == Screen::NewSample { "form_new_sample_title" } else { "form_new_lot_title" };
     let block = panel(tui.i18n.t(title).to_string(), !tui.focus_modules, tui);
@@ -198,12 +190,21 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
         .fields
         .iter()
         .enumerate()
-        .map(|(index, (label, value))| {
+        .map(|(index, field)| {
             let editing = form.editing && index == form.idx;
             let cursor = if editing { "█" } else { "" };
+            // The marker is what tells a row you fill in from a row you
+            // choose from: "▾" means Enter unfolds a list.
+            let marker = if field.is_choice() { " ▾" } else { "" };
+            let value = if field.is_choice() && field.value.is_empty() {
+                tui.i18n.t("picker_none").to_string()
+            } else {
+                field.value.clone()
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {:<22}", tui.i18n.t(label)), tui.theme.muted()),
+                Span::styled(format!(" {:<22}", tui.i18n.t(field.label)), tui.theme.muted()),
                 Span::styled(format!("{value}{cursor}"), tui.theme.accent()),
+                Span::styled(marker.to_string(), tui.theme.muted()),
             ]))
         })
         .collect();
@@ -219,11 +220,16 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     let list = List::new(items).highlight_style(tui.theme.selected());
     frame.render_stateful_widget(list, list_area, &mut ListState::default().with_selected(Some(form.idx)));
 
-    let hint = form
-        .fields
-        .get(form.idx)
-        .and_then(|(label, _)| accepted_values(label))
-        .unwrap_or_else(|| tui.i18n.t("form_optional_hint").to_string());
+    // A short closed set is worth spelling out under the form; a long one
+    // (12 textures, 66 crops) only says how many there are and how to see
+    // them.
+    let hint = match form.fields.get(form.idx) {
+        Some(field) if field.is_choice() && field.options.len() <= 5 => {
+            field.options.iter().map(String::as_str).collect::<Vec<_>>().join(" · ")
+        }
+        Some(field) if field.is_choice() => format!("{} {}", field.options.len(), tui.i18n.t("form_pick_hint")),
+        _ => tui.i18n.t("form_optional_hint").to_string(),
+    };
     frame.render_widget(
         Paragraph::new(Line::styled(format!(" {hint}"), tui.theme.muted())).wrap(Wrap { trim: true }),
         hint_area,
@@ -539,6 +545,39 @@ fn settings(frame: &mut Frame, area: Rect, tui: &Tui) {
     frame.render_stateful_widget(list, area, &mut ListState::default().with_selected(Some(tui.setting_idx)));
 }
 
+/// The unfolded option list for the selected form field. Sized to its
+/// contents up to half the screen, so a 4-option list isn't a huge empty
+/// box and the 66-crop list scrolls instead of overflowing.
+fn picker_overlay(frame: &mut Frame, tui: &Tui) {
+    let Some(picker) = &tui.picker else { return };
+    let label = tui
+        .form
+        .as_ref()
+        .and_then(|form| form.fields.get(picker.field_idx))
+        .map(|field| tui.i18n.t(field.label))
+        .unwrap_or_default();
+
+    let items: Vec<ListItem> = picker
+        .options
+        .iter()
+        .map(|option| {
+            let shown = if option.is_empty() { tui.i18n.t("picker_none") } else { option.as_str() };
+            ListItem::new(Line::raw(format!(" {shown}")))
+        })
+        .collect();
+
+    let height = (items.len() as u16 + 2).min(frame.area().height / 2).max(3);
+    let area = centered(frame.area(), 40, height);
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(panel(label.to_string(), true, tui))
+            .highlight_style(tui.theme.selected()),
+        area,
+        &mut ListState::default().with_selected(Some(picker.idx)),
+    );
+}
+
 fn help_overlay(frame: &mut Frame, tui: &Tui) {
     let mut keys = vec![
         ("j/k · ↑/↓", "help_move"),
@@ -553,7 +592,9 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
             keys.insert(1, ("0-9 · .", "help_yield"));
         }
         Screen::Settings => keys.insert(0, ("h/l · ←/→", "help_change")),
-        Screen::NewLot | Screen::NewSample => keys.insert(0, ("Enter", "help_edit")),
+        Screen::NewLot | Screen::NewSample => {
+            keys.insert(0, ("Enter", if tui.picker.is_some() { "help_pick" } else { "help_edit" }))
+        }
         _ => {}
     }
 
@@ -729,6 +770,35 @@ mod tests {
 
         tui.help = true;
         assert!(render(&tui, 80, 24).contains("Keybindings"), "the help overlay must fit an 80x24 terminal");
+    }
+
+    /// The longest list the form can unfold is the 66-crop catalog; it has
+    /// to scroll inside the overlay rather than run off an 80x24 terminal.
+    #[test]
+    fn the_unfolded_option_list_renders_over_the_form() {
+        let mut tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        tui.open_form(Screen::NewLot);
+
+        for label in ["form_irrigation", "form_crop"] {
+            let form = tui.form.as_mut().expect("form");
+            form.idx = form.fields.iter().position(|field| field.label == label).expect("field");
+            tui.activate_form_row();
+            assert!(tui.picker.is_some(), "{label} must unfold a list");
+            for (width, height) in [(80, 24), (130, 40)] {
+                let out = render(&tui, width, height);
+                assert!(out.contains("Modules"), "{label} at {width}x{height} lost the module column");
+            }
+            tui.picker = None;
+        }
+
+        // The list must actually paint its entries, not just an empty
+        // frame. Texture is the case that proves it: with 12 options the
+        // hint line under the form only shows a count, so a texture name
+        // on screen can only have come from the overlay.
+        let form = tui.form.as_mut().expect("form");
+        form.idx = form.fields.iter().position(|field| field.label == "form_texture").expect("field");
+        tui.activate_form_row();
+        assert!(render(&tui, 80, 24).contains("silty_clay_loam"), "the option list must render its entries");
     }
 
     #[test]

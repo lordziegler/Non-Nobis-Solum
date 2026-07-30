@@ -113,6 +113,8 @@ form_method = "lab method"
 form_depth_from = "depth from cm"
 form_depth_to = "depth to cm"
 form_optional_hint = "Enter edits the selected field · empty optional fields are left unset"
+form_pick_hint = "options · Enter opens the list"
+picker_none = "(none)"
 
 # settings
 settings_title = "Settings"
@@ -135,6 +137,7 @@ help_filter = "filter the list"
 help_yield = "type the yield goal"
 help_change = "change value"
 help_edit = "edit the selected field"
+help_pick = "choose from the list"
 help_quit = "quit"
 help_close = "press ? or Esc to close"
 
@@ -149,7 +152,7 @@ hint_crops = "j/k move · / filter · Enter pick crop · Esc back"
 hint_plan = "j/k move · Tab pane · Esc back · ? help"
 hint_inspect = "j/k move · Tab pane · Esc back · ? help"
 hint_settings = "j/k move · h/l change · Esc back"
-hint_form = "j/k move · Enter edit or save · Esc discard"
+hint_form = "j/k move · Enter choose, edit or save · Esc discard"
 hint_yield = "0-9 type the yield goal · Enter confirm · Esc cancel"
 
 # messages

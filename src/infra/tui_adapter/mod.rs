@@ -23,7 +23,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use ratatui::DefaultTerminal;
 
 use crate::core::application::{FertilityScenario, LotRegistration, LotSummary, ScenarioInspection, SoilTestEntry};
-use crate::core::domain::{Crop, DomainError, FertilityPlan, YieldTarget};
+use crate::core::domain::{Crop, DomainError, FertilityPlan, IrrigationSystem, Nutrient, Texture, YieldTarget};
 use crate::core::ports::{
     AgroclimaticRepository, FertilityCalculatorPort, InspectScenarioPort, ListCropsPort, ListLotsPort, RegisterLotPort,
 };
@@ -106,27 +106,82 @@ const UNPLANNED_MICRONUTRIENTS: [&str; 6] = ["Fe", "Mn", "Zn", "Cu", "B", "Mo"];
 /// measured in something else.
 const YIELD_UNIT: &str = "t_ha";
 
-/// A data-entry form: a fixed list of labelled text fields plus a trailing
+/// Units a soil test may be reported in. `mg_per_kg` is consumed directly;
+/// anything else has to have a conversion in `conversion_factors.toml`,
+/// and `cmolc_per_kg` is the only other one the shipped curated data and
+/// the liming math actually use.
+/// ponytail: extend when a lab report arrives in something else.
+const SOIL_TEST_UNITS: [&str; 2] = ["mg_per_kg", "cmolc_per_kg"];
+
+/// The region every shipped reference row answers to, whatever profile is
+/// active. Mirrors the `"any"` sentinel the reference adapters look for.
+const REGION_ANY: &str = "any";
+
+/// Nutrients a lab panel can report, which is every one the domain knows
+/// except N: nitrogen availability is derived from organic matter and
+/// never read from a soil test (see `CalculateFertilityPlan`), so offering
+/// it here would let someone enter a value the plan then ignores.
+fn soil_test_nutrients() -> Vec<String> {
+    Nutrient::ALL
+        .iter()
+        .filter(|nutrient| **nutrient != Nutrient::N)
+        .map(Nutrient::to_string)
+        .collect()
+}
+
+/// One row of a form.
+///
+/// `options` empty means the field is free text, and that is reserved for
+/// the three kinds of value no closed list can express: an identifier
+/// somebody is inventing (a new lot id), a laboratory reading, and a
+/// coordinate. Everything else — every value that must match a domain
+/// enum, a catalog entry or a reference-data key — is picked from
+/// `options`, so a plan can't fail on a typo the front-end could have
+/// prevented.
+pub struct FormField {
+    label: &'static str,
+    value: String,
+    options: Vec<String>,
+}
+
+impl FormField {
+    fn is_choice(&self) -> bool {
+        !self.options.is_empty()
+    }
+}
+
+/// A data-entry form: a fixed list of labelled fields plus a trailing
 /// "save" row. Every value stays raw text all the way to `RegisterLot`,
-/// which is the only thing allowed to decide whether it is valid.
+/// which is the only thing allowed to decide whether it is valid — a
+/// picked value is validated exactly like a typed one.
 pub struct Form {
     screen: Screen,
-    fields: Vec<(&'static str, String)>,
+    fields: Vec<FormField>,
     idx: usize,
     editing: bool,
 }
 
 impl Form {
-    fn new(screen: Screen, labels: &[&'static str], prefill: &[(&str, String)]) -> Self {
+    fn new(
+        screen: Screen,
+        labels: &[&'static str],
+        prefill: &[(&str, String)],
+        options: &[(&str, Vec<String>)],
+    ) -> Self {
         let fields = labels
             .iter()
-            .map(|label| {
-                let value = prefill
+            .map(|label| FormField {
+                label,
+                value: prefill
                     .iter()
                     .find(|(id, _)| id == label)
                     .map(|(_, value)| value.clone())
-                    .unwrap_or_default();
-                (*label, value)
+                    .unwrap_or_default(),
+                options: options
+                    .iter()
+                    .find(|(id, _)| id == label)
+                    .map(|(_, values)| values.clone())
+                    .unwrap_or_default(),
             })
             .collect();
         Self { screen, fields, idx: 0, editing: false }
@@ -140,8 +195,8 @@ impl Form {
     fn value(&self, label: &str) -> String {
         self.fields
             .iter()
-            .find(|(id, _)| *id == label)
-            .map(|(_, value)| value.clone())
+            .find(|field| field.label == label)
+            .map(|field| field.value.clone())
             .unwrap_or_default()
     }
 
@@ -174,6 +229,16 @@ impl Form {
             depth_to_cm: self.value("form_depth_to"),
         }
     }
+}
+
+/// An open option list, filling one field of the form on screen. It owns a
+/// copy of the options rather than borrowing the form, so the list can be
+/// navigated while the form stays exactly as it was — closing with Esc
+/// leaves the field untouched.
+pub struct Picker {
+    field_idx: usize,
+    options: Vec<String>,
+    idx: usize,
 }
 
 pub struct Tui {
@@ -209,6 +274,8 @@ pub struct Tui {
     /// The form currently on screen, if any. Rebuilt each time a form
     /// screen is opened, so a half-typed lot never survives a detour.
     form: Option<Form>,
+    /// The option list currently unfolded over that form, if any.
+    picker: Option<Picker>,
     scroll: u16,
     setting_idx: usize,
     message: String,
@@ -253,6 +320,7 @@ impl Tui {
             plan: None,
             inspection: None,
             form: None,
+            picker: None,
             scroll: 0,
             setting_idx: 0,
             message: String::new(),
@@ -449,6 +517,7 @@ impl Tui {
     fn open_form(&mut self, screen: Screen) {
         self.screen = screen;
         self.focus_modules = false;
+        self.picker = None;
         let form = match screen {
             Screen::NewSample => Form::new(
                 screen,
@@ -456,6 +525,14 @@ impl Tui {
                 &[
                     ("form_field_id", self.selected_lot().map(|lot| lot.field_id.clone()).unwrap_or_default()),
                     ("form_depth_from", "0".to_string()),
+                ],
+                &[
+                    // A sample can only be attached to a lot that already
+                    // exists — `RegisterLot` refuses anything else — so the
+                    // lot is picked, never spelled out.
+                    ("form_field_id", self.lots.iter().map(|lot| lot.field_id.clone()).collect()),
+                    ("form_nutrient", soil_test_nutrients()),
+                    ("form_unit", SOIL_TEST_UNITS.iter().map(|unit| unit.to_string()).collect()),
                 ],
             ),
             // Region is prefilled with the active profile: the reference
@@ -468,9 +545,64 @@ impl Tui {
                     ("form_region", self.cfg.profile.clone()),
                     ("form_yield_unit", YIELD_UNIT.to_string()),
                 ],
+                &[
+                    ("form_texture", Texture::ALL.iter().map(Texture::to_string).collect()),
+                    ("form_irrigation", IrrigationSystem::ALL.iter().map(IrrigationSystem::to_string).collect()),
+                    ("form_region", self.region_options()),
+                    ("form_crop", self.crop_options()),
+                    ("form_yield_unit", vec![YIELD_UNIT.to_string()]),
+                ],
             ),
         };
         self.form = Some(form);
+    }
+
+    /// Regions a lot can claim: the reference profiles on disk, plus the
+    /// `"any"` sentinel that every shipped reference row answers to. Typing
+    /// a region no reference file knows is the mismatch that used to make
+    /// `plan` fail outright — see `docs/BLOCKERS-AND-ROADMAP.md`, blocker 4.
+    fn region_options(&self) -> Vec<String> {
+        let mut regions = vec![REGION_ANY.to_string()];
+        regions.extend(self.profiles.iter().cloned());
+        regions
+    }
+
+    /// The crop catalog, with an empty first entry: a lot may be registered
+    /// with no planning row at all, and that has to stay pickable.
+    fn crop_options(&self) -> Vec<String> {
+        std::iter::once(String::new())
+            .chain(self.crops.iter().map(|crop| crop.crop_id.clone()))
+            .collect()
+    }
+
+    /// Enter on a form row does whatever that row is for: submit, unfold
+    /// the option list, or start typing.
+    fn activate_form_row(&mut self) {
+        let Some(form) = &self.form else { return };
+        if form.idx == form.save_row() {
+            return self.submit_form();
+        }
+        let Some(field) = form.fields.get(form.idx) else { return };
+        if field.is_choice() {
+            // Opens on whatever the field already holds, so re-opening a
+            // list never silently moves the selection.
+            let options = field.options.clone();
+            let idx = options.iter().position(|option| *option == field.value).unwrap_or(0);
+            self.picker = Some(Picker { field_idx: form.idx, options, idx });
+        } else if let Some(form) = &mut self.form {
+            form.editing = true;
+        }
+    }
+
+    /// Commits the highlighted option into the field the picker was opened
+    /// for. A picker with no options can't be opened, so a miss here means
+    /// the form changed underneath it — the field is left alone.
+    fn commit_picker(&mut self) {
+        let Some(picker) = self.picker.take() else { return };
+        let Some(chosen) = picker.options.get(picker.idx).cloned() else { return };
+        if let Some(field) = self.form.as_mut().and_then(|form| form.fields.get_mut(picker.field_idx)) {
+            field.value = chosen;
+        }
     }
 
     /// Hands the typed text to `RegisterLot`, which is where it is parsed,
@@ -537,6 +669,10 @@ impl Tui {
         if self.editing_yield {
             return self.on_yield_key(code);
         }
+        // The picker sits on top of the form, so it eats keys first.
+        if self.picker.is_some() {
+            return self.on_picker_key(code);
+        }
         if self.form.as_ref().is_some_and(|form| form.editing) {
             return self.on_form_edit_key(code);
         }
@@ -602,11 +738,32 @@ impl Tui {
         }
     }
 
-    /// Free text: any value the domain can parse is typed here verbatim,
-    /// including a texture name or a negative coordinate.
+    /// The unfolded option list: j/k moves, Enter commits, Esc closes and
+    /// leaves the field as it was. Same navigation keys as every other list
+    /// in the app, so nothing new has to be learned to fill in a form.
+    fn on_picker_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
+            KeyCode::Enter => self.commit_picker(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(picker) = &mut self.picker {
+                    picker.idx = step(picker.idx, picker.options.len(), 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(picker) = &mut self.picker {
+                    picker.idx = step(picker.idx, picker.options.len(), -1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Free text, for the values no closed list can express: a new lot id,
+    /// a lab reading, a coordinate.
     fn on_form_edit_key(&mut self, code: KeyCode) {
         let Some(form) = &mut self.form else { return };
-        let Some((_, value)) = form.fields.get_mut(form.idx) else {
+        let Some(value) = form.fields.get_mut(form.idx).map(|field| &mut field.value) else {
             form.editing = false;
             return;
         };
@@ -683,11 +840,7 @@ impl Tui {
                 }
             }
             Screen::Settings => self.change_setting(1),
-            Screen::NewLot | Screen::NewSample => match &mut self.form {
-                Some(form) if form.idx == form.save_row() => self.submit_form(),
-                Some(form) => form.editing = true,
-                None => {}
-            },
+            Screen::NewLot | Screen::NewSample => self.activate_form_row(),
             Screen::Plan | Screen::Inspect => {}
         }
     }
@@ -712,6 +865,7 @@ impl Tui {
         } else {
             // Leaving a form discards it: a half-typed lot is not a draft.
             self.form = None;
+            self.picker = None;
             self.screen = Screen::Dashboard;
             self.focus_modules = true;
             self.module_idx = 0;
@@ -822,16 +976,31 @@ mod tests {
         }
     }
 
-    /// Types a value into a form field. Navigation and submission still go
-    /// through the real key handling — only the typing is shortcut.
+    /// Puts a value into a form field. Navigation and submission still go
+    /// through the real key handling — only the entry is shortcut.
     fn fill(tui: &mut Tui, label: &str, value: &str) {
         let form = tui.form.as_mut().expect("a form is on screen");
         let field = form
             .fields
             .iter_mut()
-            .find(|(id, _)| *id == label)
+            .find(|field| field.label == label)
             .unwrap_or_else(|| panic!("no field {label}"));
-        field.1 = value.to_string();
+        assert!(
+            field.options.is_empty() || field.options.iter().any(|option| option == value),
+            "{label} is a closed set and {value:?} is not one of its options: {:?}",
+            field.options
+        );
+        field.value = value.to_string();
+    }
+
+    /// Moves to a form field by label, the way a user would.
+    fn go_to_field(tui: &mut Tui, label: &str) {
+        let form = tui.form.as_ref().expect("a form is on screen");
+        let target = form.fields.iter().position(|field| field.label == label).expect("field exists");
+        while tui.form.as_ref().expect("form").idx != target {
+            let idx = tui.form.as_ref().expect("form").idx;
+            press(tui, if idx < target { KeyCode::Char('j') } else { KeyCode::Char('k') });
+        }
     }
 
     fn save_form(tui: &mut Tui) {
@@ -997,6 +1166,68 @@ mod tests {
         tui.yield_input = "6".to_string();
         tui.run_plan();
         assert!(tui.plan.is_some(), "silty_clay/gravity + wheat should plan: {}", tui.message);
+    }
+
+    /// Everything that has to match a domain enum, a catalog entry or a
+    /// reference key is chosen from a list; only identifiers, lab readings
+    /// and coordinates are still typed.
+    #[test]
+    fn closed_set_fields_are_picked_and_open_ended_ones_are_typed() {
+        let mut tui = tui();
+        tui.open(Some(Screen::NewLot));
+        let kinds: Vec<(&str, bool)> = tui
+            .form
+            .as_ref()
+            .expect("form")
+            .fields
+            .iter()
+            .map(|field| (field.label, field.is_choice()))
+            .collect();
+
+        for label in ["form_texture", "form_irrigation", "form_region", "form_crop", "form_yield_unit"] {
+            assert!(kinds.contains(&(label, true)), "{label} must be a list");
+        }
+        for label in ["form_field_id", "form_om", "form_ph", "form_latitude", "form_longitude"] {
+            assert!(kinds.contains(&(label, false)), "{label} must stay free text");
+        }
+
+        // A lab panel never reports N: it is derived from organic matter,
+        // so offering it would accept a value the plan then ignores.
+        tui.open(Some(Screen::NewSample));
+        let nutrients = tui.form.as_ref().expect("form").fields.iter().find(|f| f.label == "form_nutrient");
+        let nutrients = &nutrients.expect("nutrient field").options;
+        assert!(nutrients.contains(&"P".to_string()) && nutrients.contains(&"Al".to_string()));
+        assert!(!nutrients.contains(&"N".to_string()));
+    }
+
+    #[test]
+    fn the_option_list_fills_the_field_on_enter_and_leaves_it_alone_on_esc() {
+        let mut tui = tui();
+        tui.open(Some(Screen::NewLot));
+        go_to_field(&mut tui, "form_texture");
+
+        press(&mut tui, KeyCode::Enter); // unfold
+        assert!(tui.picker.is_some(), "a closed-set field must open a list, not an edit cursor");
+        press(&mut tui, KeyCode::Char('j'));
+        press(&mut tui, KeyCode::Char('j'));
+        press(&mut tui, KeyCode::Enter);
+
+        assert!(tui.picker.is_none());
+        // Third entry of `Texture::ALL`, reached with two moves from the top.
+        assert_eq!(tui.form.as_ref().expect("form").value("form_texture"), Texture::ALL[2].to_string());
+
+        // Re-opening starts on the current value, and Esc discards.
+        press(&mut tui, KeyCode::Enter);
+        assert_eq!(tui.picker.as_ref().expect("picker").idx, 2, "the list must open on the current value");
+        press(&mut tui, KeyCode::Char('j'));
+        press(&mut tui, KeyCode::Esc);
+        assert!(tui.picker.is_none());
+        assert_eq!(tui.form.as_ref().expect("form").value("form_texture"), Texture::ALL[2].to_string());
+
+        // A free-text field still types.
+        go_to_field(&mut tui, "form_ph");
+        press(&mut tui, KeyCode::Enter);
+        assert!(tui.picker.is_none() && tui.form.as_ref().expect("form").editing);
     }
 
     #[test]

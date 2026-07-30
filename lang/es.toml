@@ -113,6 +113,8 @@ form_method = "método de laboratorio"
 form_depth_from = "profundidad desde cm"
 form_depth_to = "profundidad hasta cm"
 form_optional_hint = "Enter edita el campo seleccionado · los campos opcionales vacíos se omiten"
+form_pick_hint = "opciones · Enter abre la lista"
+picker_none = "(ninguno)"
 
 # settings
 settings_title = "Ajustes"
@@ -135,6 +137,7 @@ help_filter = "filtrar la lista"
 help_yield = "escribir el rendimiento objetivo"
 help_change = "cambiar valor"
 help_edit = "editar el campo seleccionado"
+help_pick = "elegir de la lista"
 help_quit = "salir"
 help_close = "pulsa ? o Esc para cerrar"
 
@@ -149,7 +152,7 @@ hint_crops = "j/k mover · / filtrar · Enter elegir cultivo · Esc volver"
 hint_plan = "j/k mover · Tab panel · Esc volver · ? ayuda"
 hint_inspect = "j/k mover · Tab panel · Esc volver · ? ayuda"
 hint_settings = "j/k mover · h/l cambiar · Esc volver"
-hint_form = "j/k mover · Enter editar o guardar · Esc descartar"
+hint_form = "j/k mover · Enter elegir, editar o guardar · Esc descartar"
 hint_yield = "0-9 escribe el rendimiento objetivo · Enter confirmar · Esc cancelar"
 
 # messages

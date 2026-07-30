@@ -35,6 +35,26 @@ impl Nutrient {
     pub const MACRONUTRIENTS: [Nutrient; 6] =
         [Nutrient::N, Nutrient::P, Nutrient::K, Nutrient::S, Nutrient::Ca, Nutrient::Mg];
 
+    /// Every variant, so a front-end can offer the closed set instead of
+    /// asking someone to type an id `from_str` might reject. Same role as
+    /// `Texture::ALL` and `IrrigationSystem::ALL`.
+    pub const ALL: [Nutrient; 14] = [
+        Nutrient::N,
+        Nutrient::P,
+        Nutrient::K,
+        Nutrient::S,
+        Nutrient::Ca,
+        Nutrient::Mg,
+        Nutrient::Fe,
+        Nutrient::Mn,
+        Nutrient::Zn,
+        Nutrient::Cu,
+        Nutrient::B,
+        Nutrient::Mo,
+        Nutrient::Al,
+        Nutrient::H,
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Nutrient::N => "N",
@@ -82,5 +102,20 @@ impl FromStr for Nutrient {
 impl fmt::Display for Nutrient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A front-end offers `ALL` as the only way to name a nutrient, so a
+    /// variant whose text form doesn't parse back would be unpickable.
+    #[test]
+    fn every_listed_nutrient_parses_back_from_its_own_text() {
+        for nutrient in Nutrient::ALL {
+            assert_eq!(Nutrient::from_str(nutrient.as_str()).expect(nutrient.as_str()), nutrient);
+        }
+        assert!(Nutrient::MACRONUTRIENTS.iter().all(|n| Nutrient::ALL.contains(n)));
     }
 }

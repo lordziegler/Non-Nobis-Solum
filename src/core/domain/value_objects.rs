@@ -173,3 +173,21 @@ pub enum SoilStatus {
     Medium,
     High,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The TUI offers these two sets as the only way to name a texture or
+    /// an irrigation system, so a variant whose `Display` doesn't parse
+    /// back would be offered and then refused on save.
+    #[test]
+    fn every_listed_texture_and_irrigation_system_parses_back_from_its_own_text() {
+        for texture in Texture::ALL {
+            assert_eq!(Texture::from_str(&texture.to_string()).expect("texture"), texture);
+        }
+        for irrigation in IrrigationSystem::ALL {
+            assert_eq!(IrrigationSystem::from_str(&irrigation.to_string()).expect("irrigation"), irrigation);
+        }
+    }
+}
