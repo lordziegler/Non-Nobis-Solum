@@ -170,3 +170,68 @@
   efficiency_max: 1.00
   source: "Non_Nobis_Solum_Py_prototype_generalized"
   region: "global"
+
+# ---------------------------------------------------------------------------
+# FALLBACK ROWS — NOT LITERATURE. READ BEFORE TRUSTING A NUMBER BELOW.
+#
+# The rows above cover 4 of the domain's 48 texture x irrigation
+# combinations. The other 44 need real per-class efficiency data that has
+# not been transcribed yet; inventing them would be worse than admitting
+# the gap. These sentinel rows (texture "any", irrigation "any") are what
+# `YamlEfficiencyRulesRepo` falls back to when no exact row matches, so a
+# lot outside the curated grid still gets a plan instead of an error.
+#
+# Each value is mechanically derived from the rows above, not measured:
+#   efficiency_min = the lowest efficiency_min of that nutrient's covered rows
+#   efficiency_max = the highest efficiency_max of that nutrient's covered rows
+# i.e. the envelope of everything this profile actually knows about that
+# nutrient. The midpoint the use case works with therefore lands on the
+# average of the covered combinations, and the width of the range is an
+# honest statement of how little is known.
+#
+# Replace each of these with real per-texture-class data when an agronomist
+# provides it — an exact row always wins over the sentinel, so rows can be
+# added one at a time without touching code.
+# ---------------------------------------------------------------------------
+- texture: "any"
+  irrigation: "any"
+  nutrient: "N"
+  efficiency_min: 0.45
+  efficiency_max: 0.80
+  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "P"
+  efficiency_min: 0.35
+  efficiency_max: 0.55
+  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "K"
+  efficiency_min: 0.40
+  efficiency_max: 0.67
+  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "S"
+  efficiency_min: 0.90
+  efficiency_max: 1.00
+  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Ca"
+  efficiency_min: 0.90
+  efficiency_max: 1.00
+  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Mg"
+  efficiency_min: 0.90
+  efficiency_max: 1.00
+  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  region: "global"
