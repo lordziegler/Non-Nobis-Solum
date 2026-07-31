@@ -1,17 +1,5 @@
 use super::nutrient::Nutrient;
-use super::value_objects::{Depth, DemandType, IrrigationSystem, SoilStatus, Texture, YieldTarget};
-
-/// A physical soil sample taken in the field. Identifies where and when
-/// the laboratory analysis in [`SoilTest`] came from.
-#[derive(Debug, Clone)]
-pub struct SoilSample {
-    pub sample_id: String,
-    pub laboratory: String,
-    /// ISO-8601 date (YYYY-MM-DD), kept as text: the domain never parses
-    /// or arithmetics dates, it only displays them.
-    pub sampled_on: String,
-    pub depth: Depth,
-}
+use super::value_objects::{Depth, IrrigationSystem, SoilStatus, Texture, YieldTarget};
 
 /// One analytical result for a single nutrient from a lab report.
 #[derive(Debug, Clone)]
@@ -31,15 +19,6 @@ pub struct Crop {
     pub name: String,
     pub crop_type: String,
     pub family: String,
-}
-
-/// Per-nutrient demand coefficient for a crop, as loaded from the
-/// reference removal tables (see `NutrientRemovalRepository`).
-#[derive(Debug, Clone)]
-pub struct NutrientDemand {
-    pub demand_type: DemandType,
-    pub nutrient: Nutrient,
-    pub base_coefficient_kg_per_yield_unit: f64,
 }
 
 /// A commercial fertilizer product: nutrient composition by percent

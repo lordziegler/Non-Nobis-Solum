@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn every_listed_nutrient_parses_back_from_its_own_text() {
         for nutrient in Nutrient::ALL {
-            assert_eq!(Nutrient::from_str(nutrient.as_str()).expect(nutrient.as_str()), nutrient);
+            assert_eq!(Nutrient::from_str(nutrient.as_str()).ok(), Some(nutrient));
         }
         assert!(Nutrient::MACRONUTRIENTS.iter().all(|n| Nutrient::ALL.contains(n)));
     }

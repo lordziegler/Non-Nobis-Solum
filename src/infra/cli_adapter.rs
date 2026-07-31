@@ -109,8 +109,8 @@ fn print_plan(plan: &crate::core::domain::FertilityPlan) {
         plan.field_id, plan.sample_id, plan.crop_id, plan.yield_target.value, plan.yield_target.unit
     );
     println!(
-        "{:<4} {:>14} {:>10} {:>10} {:>10} {:>8}  {}",
-        "Nut", "Availability", "Demand", "Eff.", "Net req.", "Status", "Dose"
+        "{:<4} {:>14} {:>10} {:>10} {:>10} {:>8}  Dose",
+        "Nut", "Availability", "Demand", "Eff.", "Net req.", "Status"
     );
     for entry in &plan.nutrient_results {
         let status = match entry.soil_status {

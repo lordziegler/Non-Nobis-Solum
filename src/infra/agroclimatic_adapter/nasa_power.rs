@@ -38,7 +38,6 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct NasaPowerRepo {
     http: reqwest::blocking::Client,
-    base_url: String,
 }
 
 impl NasaPowerRepo {
@@ -47,14 +46,7 @@ impl NasaPowerRepo {
             .timeout(TIMEOUT)
             .build()
             .map_err(|e| DomainError::ExternalServiceUnavailable(format!("could not build http client: {e}")))?;
-        Ok(Self { http, base_url: BASE_URL.to_string() })
-    }
-
-    /// Point the client at a different host — used by the tests to serve
-    /// a canned response without reaching the real API.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
+        Ok(Self { http })
     }
 }
 
@@ -62,7 +54,7 @@ impl AgroclimaticRepository for NasaPowerRepo {
     fn fetch_climatology(&self, latitude: f64, longitude: f64) -> Result<AnnualClimatology, DomainError> {
         let response = self
             .http
-            .get(&self.base_url)
+            .get(BASE_URL)
             .query(&[
                 ("latitude", format!("{latitude:.4}")),
                 ("longitude", format!("{longitude:.4}")),

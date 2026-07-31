@@ -139,33 +139,6 @@ pub struct YieldTarget {
     pub unit: String,
 }
 
-/// Whether reference coefficients represent total plant absorption
-/// (uptake by the whole plant) or harvest extraction (removed with the
-/// harvested product only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DemandType {
-    Absorption,
-    Extraction,
-}
-
-impl FromStr for DemandType {
-    type Err = DomainError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "absorption" => Ok(DemandType::Absorption),
-            "extraction" => Ok(DemandType::Extraction),
-            other => Err(DomainError::InvalidInput(format!("unknown demand type: {other}"))),
-        }
-    }
-}
-
-/// Nutrient available in the soil, already normalized to kg/ha.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Availability {
-    pub kg_ha: f64,
-}
-
 /// Qualitative interpretation of a soil test value against critical levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoilStatus {

@@ -336,7 +336,10 @@ mod tests {
 
     #[test]
     fn unparseable_and_out_of_range_values_are_refused_one_by_one() {
-        let cases: Vec<(&str, fn(&mut LotRegistration))> = vec![
+        /// Breaks one field of an otherwise valid registration.
+        type Break = fn(&mut LotRegistration);
+
+        let cases: [(&str, Break); 12] = [
             ("blank id", |r| r.field_id = "  ".to_string()),
             ("unknown texture", |r| r.texture = "chocolate".to_string()),
             ("unknown irrigation", |r| r.irrigation_system = "hose".to_string()),
@@ -374,9 +377,9 @@ mod tests {
             depth_to_cm: "20".to_string(),
         };
 
-        assert!(use_case.add_soil_tests("LOT-EXISTING", &[entry.clone()]).is_ok());
+        assert!(use_case.add_soil_tests("LOT-EXISTING", std::slice::from_ref(&entry)).is_ok());
         assert!(matches!(
-            use_case.add_soil_tests("LOT-NOWHERE", &[entry.clone()]),
+            use_case.add_soil_tests("LOT-NOWHERE", std::slice::from_ref(&entry)),
             Err(DomainError::NotFound(_))
         ));
         assert!(matches!(use_case.add_soil_tests("LOT-EXISTING", &[]), Err(DomainError::InvalidInput(_))));

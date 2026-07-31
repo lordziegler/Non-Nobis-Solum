@@ -53,7 +53,6 @@ pub trait CuratedDataWriter {
 
 pub trait CropCatalogRepository {
     fn list_crops(&self) -> Result<Vec<Crop>, DomainError>;
-    fn get_crop(&self, crop_id: &str) -> Result<Crop, DomainError>;
 }
 
 /// Crop nutrient removal/absorption coefficients, per unit of yield.
@@ -95,7 +94,6 @@ pub trait CriticalLevelsRepository {
 
 pub trait FertilizerSourceRepository {
     fn list_sources(&self) -> Result<Vec<FertilizerSource>, DomainError>;
-    fn get_source(&self, source_id: &str) -> Result<FertilizerSource, DomainError>;
 }
 
 /// Literature constants for liming: how much CaCO3-equivalent one unit of

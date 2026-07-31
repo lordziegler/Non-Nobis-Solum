@@ -38,6 +38,14 @@ impl CsvFieldContextRepo {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self { path: path.as_ref().to_path_buf() }
     }
+
+    fn rows(&self) -> Result<impl Iterator<Item = Result<FieldContextRow, DomainError>>, DomainError> {
+        let reader = csv::Reader::from_path(&self.path)
+            .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
+        Ok(reader
+            .into_deserialize::<FieldContextRow>()
+            .map(|row| row.map_err(|e| DomainError::DataSource(e.to_string()))))
+    }
 }
 
 impl TryFrom<FieldContextRow> for FieldContext {
@@ -58,16 +66,6 @@ impl TryFrom<FieldContextRow> for FieldContext {
             latitude: row.latitude,
             longitude: row.longitude,
         })
-    }
-}
-
-impl CsvFieldContextRepo {
-    fn rows(&self) -> Result<impl Iterator<Item = Result<FieldContextRow, DomainError>>, DomainError> {
-        let reader = csv::Reader::from_path(&self.path)
-            .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
-        Ok(reader
-            .into_deserialize::<FieldContextRow>()
-            .map(|row| row.map_err(|e| DomainError::DataSource(e.to_string()))))
     }
 }
 

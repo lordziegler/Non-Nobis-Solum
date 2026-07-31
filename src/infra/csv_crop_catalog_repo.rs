@@ -25,8 +25,10 @@ impl CsvCropCatalogRepo {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self { path: path.as_ref().to_path_buf() }
     }
+}
 
-    fn read_all(&self) -> Result<Vec<Crop>, DomainError> {
+impl CropCatalogRepository for CsvCropCatalogRepo {
+    fn list_crops(&self) -> Result<Vec<Crop>, DomainError> {
         let mut reader = csv::Reader::from_path(&self.path)
             .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
 
@@ -37,18 +39,5 @@ impl CsvCropCatalogRepo {
                 Ok(Crop { crop_id: row.crop_id, name: row.name, crop_type: row.crop_type, family: row.family })
             })
             .collect()
-    }
-}
-
-impl CropCatalogRepository for CsvCropCatalogRepo {
-    fn list_crops(&self) -> Result<Vec<Crop>, DomainError> {
-        self.read_all()
-    }
-
-    fn get_crop(&self, crop_id: &str) -> Result<Crop, DomainError> {
-        self.read_all()?
-            .into_iter()
-            .find(|c| c.crop_id == crop_id)
-            .ok_or_else(|| DomainError::NotFound(format!("no crop with crop_id={crop_id}")))
     }
 }

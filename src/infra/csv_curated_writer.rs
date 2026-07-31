@@ -14,13 +14,6 @@ use std::path::{Path, PathBuf};
 use crate::core::domain::{DomainError, FieldContext, SoilTest, YieldTarget};
 use crate::core::ports::CuratedDataWriter;
 
-/// Trailing column of `field_context.csv`: free text explaining where the
-/// coordinates came from. Written empty for a lot registered through the
-/// app — the app knows nothing about their provenance, and claiming
-/// otherwise would be inventing metadata. It is still written, because a
-/// short row would make the whole file unreadable to `csv::Reader`.
-const NO_COORDINATES_NOTE: &str = "";
-
 pub struct CsvCuratedWriter {
     field_context: PathBuf,
     soil_tests: PathBuf,
@@ -57,14 +50,10 @@ fn append(path: &Path, records: &[Vec<String>]) -> Result<(), DomainError> {
         .map_err(|e| DomainError::DataSource(format!("{}: {e}", path.display())))
 }
 
-fn number(value: f64) -> String {
-    value.to_string()
-}
-
 /// An absent coordinate is an empty field, which `serde` reads back as
 /// `None` — writing `0` there would place the lot in the Gulf of Guinea.
 fn optional_number(value: Option<f64>) -> String {
-    value.map(number).unwrap_or_default()
+    value.map(|v| v.to_string()).unwrap_or_default()
 }
 
 impl CuratedDataWriter for CsvCuratedWriter {
@@ -75,15 +64,19 @@ impl CuratedDataWriter for CsvCuratedWriter {
             context.sample_id.clone(),
             context.texture.to_string(),
             context.irrigation_system.to_string(),
-            number(context.organic_matter_percent),
-            number(context.ph),
-            number(context.cec_cmolc_kg),
-            number(context.bulk_density_kg_dm3),
-            number(context.arable_depth_m),
+            context.organic_matter_percent.to_string(),
+            context.ph.to_string(),
+            context.cec_cmolc_kg.to_string(),
+            context.bulk_density_kg_dm3.to_string(),
+            context.arable_depth_m.to_string(),
             context.region.clone(),
             optional_number(context.latitude),
             optional_number(context.longitude),
-            NO_COORDINATES_NOTE.to_string(),
+            // Trailing `source_note` column: free text explaining where the
+            // coordinates came from. Empty for a lot registered through the
+            // app — it knows nothing about their provenance — but still
+            // written, because a short row makes the whole file unreadable.
+            String::new(),
         ];
         append(&self.field_context, &[record])
     }
@@ -95,11 +88,11 @@ impl CuratedDataWriter for CsvCuratedWriter {
                 vec![
                     test.sample_id.clone(),
                     test.nutrient.to_string(),
-                    number(test.value),
+                    test.value.to_string(),
                     test.unit.clone(),
                     test.method.clone(),
-                    number(test.layer.from_cm),
-                    number(test.layer.to_cm),
+                    test.layer.from_cm.to_string(),
+                    test.layer.to_cm.to_string(),
                 ]
             })
             .collect();
@@ -110,7 +103,7 @@ impl CuratedDataWriter for CsvCuratedWriter {
         let record = vec![
             field_id.to_string(),
             crop_id.to_string(),
-            number(target.value),
+            target.value.to_string(),
             target.unit.clone(),
         ];
         append(&self.yield_targets, &[record])

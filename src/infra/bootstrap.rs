@@ -88,7 +88,9 @@ impl App {
     }
 }
 
-/// The live agroclimatic provider: NASA POWER behind an in-memory cache.
+/// The live agroclimatic provider, for a one-shot CLI run: NASA POWER,
+/// uncached — a single run fetches one climatology and exits, so a cache
+/// in front of it would never be read.
 ///
 /// Returns `None` rather than an error if the HTTP client can't even be
 /// constructed — at this layer that is indistinguishable from the API
@@ -97,7 +99,7 @@ impl App {
 /// Swapping providers happens here and nowhere else: build a different
 /// `AgroclimaticRepository` and the use case is none the wiser.
 pub fn build_agroclimatic_repo() -> Option<Box<dyn AgroclimaticRepository>> {
-    Some(Box::new(CachedAgroclimaticRepo::new(Box::new(NasaPowerRepo::new().ok()?))))
+    Some(Box::new(NasaPowerRepo::new().ok()?))
 }
 
 /// The same provider, but as a cache a long-lived front-end can keep and

@@ -28,8 +28,10 @@ impl CsvFertilizerSourcesRepo {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self { path: path.as_ref().to_path_buf() }
     }
+}
 
-    fn read_all(&self) -> Result<Vec<FertilizerSource>, DomainError> {
+impl FertilizerSourceRepository for CsvFertilizerSourcesRepo {
+    fn list_sources(&self) -> Result<Vec<FertilizerSource>, DomainError> {
         let mut reader = csv::Reader::from_path(&self.path)
             .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
 
@@ -60,18 +62,5 @@ impl CsvFertilizerSourcesRepo {
             }
         }
         Ok(sources)
-    }
-}
-
-impl FertilizerSourceRepository for CsvFertilizerSourcesRepo {
-    fn list_sources(&self) -> Result<Vec<FertilizerSource>, DomainError> {
-        self.read_all()
-    }
-
-    fn get_source(&self, source_id: &str) -> Result<FertilizerSource, DomainError> {
-        self.read_all()?
-            .into_iter()
-            .find(|s| s.source_id == source_id)
-            .ok_or_else(|| DomainError::NotFound(format!("no fertilizer source with source_id={source_id}")))
     }
 }
