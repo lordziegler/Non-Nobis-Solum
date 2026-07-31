@@ -25,21 +25,36 @@ The visual direction is **Estrato (1b)** from
 `docs/Prototypes/Non nobis sollum TUI.zip` — a tiling workspace, not a form:
 
 ```
- NAV  non·nobis·solum · profile global · lot LOT-001 · corn      <- context bar
-┌ Modules ─┐┏ Workspace ━━━━━━━━━━━━━━━━━┓┌ System status ─┐
-│ Home   h ││  (the active screen)       ││ profile        │
-│ …        │┃                            ┃│ lot / crop     │
-└──────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└────────────────┘
- Home  j/k move · Tab pane · Enter open · ? help          ready  <- statusline
+╭──────────────────────────────────────────────────────────╮
+│ NAV │ ▸ Home │ non·nobis·solum │ global │ lot LOT-001     │  <- context bar
+╰──────────────────────────────────────────────────────────╯
+╭ MODULES ────╮╭ ACTIVE PROJECT ──────────╮╭ SYSTEM STATUS ╮
+│▎⌂ Home    h ││  (the active screen)     ││ profile       │
+│ ◈ …         ││                          ││ lot / crop    │
+╰─────────────╯╰──────────────────────────╯╰───────────────╯
+╭──────────────────────────────────────────────────────────╮
+│ NAV │ home │ j/k move · Tab pane · … │ ● ready            │  <- statusline
+╰──────────────────────────────────────────────────────────╯
 ```
 
+- Both bars are framed boxes, so each costs 3 rows (`ui::BAR`).
 - Below 92 columns the status column is dropped so an 80x24 terminal keeps
   the module column and the workspace intact (`ui::NARROW`).
-- The focused panel gets thick borders in the accent colour; the other one
-  stays plain and muted.
+- Every panel is rounded; the focused one is told apart by an **accent
+  border and a lit title**, never by a heavier line — the mosaic must not
+  shift as focus moves.
+- The selected row of any list or table carries `▎` (`ui::MARKER`), the
+  prototype's inset accent rule, over a reverse-video row.
+- The dashboard opens with the prototype's box-drawing wordmark over a
+  subtitle — `TOOLKIT · vX.Y.Z · $USER`, greeting whoever is running it
+  (`ui::current_user`, falling back to `LOGNAME`, and dropping the segment
+  when a session has neither). The banner needs 11 rows and
+  `ui::banner_width` columns — the subtitle is *wider* than the art, so the
+  art's own width is not what decides the fit. Below that it is dropped
+  whole, never clipped.
 - The statusline carries mode (`NAV`/`FILTER`/`HELP`), screen, keys, and the
-  last message — green when informational, **red when it is an error**.
-  Errors never leave the status bar and never panic.
+  last message behind a dot — teal when informational, **red when it is an
+  error**. Errors never leave the status bar and never panic.
 
 ## Screens
 
@@ -48,7 +63,7 @@ The visual direction is **Estrato (1b)** from
 | Dashboard | `bootstrap::App::lots()` | lot table (lot · crop · yield goal); `Enter` plans the selected lot |
 | Crop catalog | `ListCropsPort::list_crops` | `/` filters over id, name, type and family; `Enter` picks a crop, overriding the lot's curated one |
 | Fertility plan | `FertilityCalculatorPort::calculate` | per nutrient: demand, soil supply, efficiency, to-apply, balance bar, soil status, product and dose |
-| Inspect | `InspectScenario::inspect` | field context, soil tests, per-nutrient provenance, then the muted micronutrient rows |
+| Inspect | `InspectScenario::inspect` | field context, soil tests, per-nutrient provenance, then the muted micronutrient row |
 | Settings | — | language toggle, reference profile, and the three data paths (read-only) |
 
 ## Keys
@@ -69,10 +84,10 @@ The visual direction is **Estrato (1b)** from
 
 | File | Lines | What it owns |
 |---|---|---|
-| `src/infra/tui_adapter/mod.rs` | 482 | `Tui` state, the event loop, every use-case call |
-| `src/infra/tui_adapter/ui.rs` | 590 | all rendering; the only file that formats numbers |
+| `src/infra/tui_adapter/mod.rs` | 1312 | `Tui` state, the event loop, every use-case call |
+| `src/infra/tui_adapter/ui.rs` | 985 | all rendering; the only file that formats numbers |
 | `src/infra/tui_adapter/i18n.rs` | 77 | bundle loading and `t()` |
-| `src/infra/tui_adapter/theme.rs` | 79 | terminal query and the two palettes |
+| `src/infra/tui_adapter/theme.rs` | 133 | terminal query and the two palettes |
 | `lang/{en,es}.toml` | 123 each | the string bundles |
 | `src/tui_main.rs` | 8 | `tui_adapter::run(bootstrap::build_app())` |
 
@@ -105,18 +120,54 @@ an unknown id renders as the id itself — a missing string is visible, never
 a panic and never a blank. `bundles_parse_and_agree` fails the build if the
 two bundles drift apart, so **adding a key means adding it to both files**.
 
-Nav labels are length-constrained: the module column is 22 wide (20 inner),
-which is why the Spanish module labels are short ("Fertilización", not "Plan
-de fertilización") while the screen titles keep the long form.
+Nav labels are length-constrained: the module column is 26 wide (24 below
+`NARROW`), and a row spends 4 of its inner columns on the glyph, the
+mnemonic and their spaces. That is why the Spanish module labels are short
+("Fertilización", not "Plan de fertilización") while the screen titles keep
+the long form.
 
 ### Theme
 
 `terminal_colorsaurus::theme_mode()` runs **before** `ratatui::init()` — the
 OSC 11 handshake needs the plain tty, not raw mode + alternate screen. Dark
-or light picks between two palettes built from ANSI slots only (bright
-slots on dark, normal slots on light); the accent is slot 4/12, as briefed.
-No hex colours anywhere: panels, text and backgrounds inherit the terminal.
-A terminal that doesn't answer falls back to the dark bundle.
+or light picks between two palettes; a terminal that doesn't answer falls
+back to the dark bundle.
+
+**No hex colour exists anywhere in the TUI.** Backgrounds are
+`Color::Reset`, so a configured transparency or background image survives
+untouched, and every semantic role is an ANSI slot the user's own colour
+scheme defines:
+
+| Role | Estrato | Dark bundle | Light bundle |
+|---|---|---|---|
+| `accent` (focus) | copper | 11 bright yellow | 3 yellow |
+| `ok` | sage-teal | 14 bright cyan | 6 cyan |
+| `warn` | amber | 3 yellow | 3 yellow |
+| `error` | coral | 9 bright red | 1 red |
+| `border` | slate | 8 | 8 |
+| `fg` / `bg` / `panel` | graphite | Reset | Reset |
+
+`warn` sits one slot below `accent` on the dark bundle so "medium" soil
+status does not compete with focus.
+
+**Only `border` may be faint, and only structure may use it** — borders,
+separators, the unfilled half of a bar. Slot 8 is the one slot whose
+contrast against the background is anybody's guess, and a terminal with a
+wallpaper swallows it whole; a `theme.dim` role for secondary *text* is
+exactly how panel titles, column headings and the status-column labels once
+became unreadable. Text ranks by emphasis instead: `muted()` is the
+terminal's own foreground, `strong()` adds bold, `accent()`/`selected()` go
+above that. Nothing fades.
+
+Two consequences worth knowing before changing anything here:
+
+- **The direction lives in the structure, not the palette** — rounded tiles,
+  framed bars, filled badges, the `▎` rule, the wordmark. A terminal-driven
+  palette cannot reproduce copper, and that is the accepted trade.
+- **A highlight may not name a background**, because this palette does not
+  know what the background is. `selected()` and `badge()` both use
+  `Modifier::REVERSED`, the one highlight legible in any scheme. The cost is
+  that a reversed row flattens its per-cell colours.
 
 ## Boundary notes and gaps
 
@@ -139,8 +190,8 @@ Read these before "fixing" anything that looks odd.
   one has been calculated for the same scenario, and shows `—` otherwise
   (`ui::planned_status`).
 - **Micronutrients** (Fe/Mn/Zn/Cu/B/Mo) are listed on the inspect screen as
-  muted "not yet planned" rows, from the `UNPLANNED_MICRONUTRIENTS` const —
-  hardcoded on purpose, so the row disappears the day a use case covers
+  a single "not yet planned" row, from the `UNPLANNED_MICRONUTRIENTS` const
+  — hardcoded on purpose, so the row disappears the day a use case covers
   them.
 - **`product` is hardcoded to `"grain"`**, matching the CLI default and the
   open item in `docs/HANDOFF.md`. When the real harvested organ per crop is
@@ -173,9 +224,10 @@ cargo run --bin nns-tui
 
 Tests specific to this adapter, all in-module:
 
-- `ui::tests::every_screen_renders_at_both_densities` — draws all five
-  screens plus the help overlay through `TestBackend` at 80x24 and 130x40.
-  This is what catches layout panics and clipped panels.
+- `ui::tests::every_screen_renders_at_both_densities` — draws every screen
+  plus the help overlay through `TestBackend` at 80x24 and 130x40. This is
+  what catches layout panics and clipped panels.
+- `ui::tests::the_wordmark_shows_when_it_fits_and_is_dropped_when_it_does_not`
 - `tests::esc_leaves_a_screen_first_and_quits_only_from_the_dashboard`
 - `tests::filter_narrows_the_catalog_and_typing_never_moves_the_selection`
 - `tests::language_toggle_swaps_the_bundle_without_touching_the_data`
@@ -194,7 +246,7 @@ the input pipe sends `Ctrl-D`, which is a real key event to the app.
 - **A string**: add the id to `lang/en.toml` *and* `lang/es.toml`, then use
   `tui.i18n.t("id")`. Never a literal in `ui.rs`.
 - **A screen**: a `Screen` variant, a row in `MODULES` (label id, mnemonic,
-  target), a `workspace()` arm, a `hint_*` string, and a `screen_title()`
+  target, glyph), a `workspace()` arm, a `hint_*` string, and a `screen_title()`
   arm. Selection movement goes in `Tui::move_selection`.
 - **A module that calls a new use case**: build it from
   `bootstrap::build_*(&self.cfg.layout())` inside a `Tui` method, match on

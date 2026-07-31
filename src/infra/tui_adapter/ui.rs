@@ -4,6 +4,7 @@
 //! statusline at the bottom. Every label goes through `tui.i18n`.
 
 use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
@@ -17,17 +18,40 @@ use crate::core::domain::SoilStatus;
 /// an 80x24 terminal keeps modules + workspace intact.
 const NARROW: u16 = 92;
 
+/// Context bar and statusline are framed boxes, like the prototype's, so
+/// each costs a border row above and below its content.
+const BAR: u16 = 3;
+
+/// The accent rule down the left edge of a selected row — the terminal
+/// equivalent of the prototype's `inset 2px 0 0 var(--acc)`.
+const MARKER: &str = "▎";
+
+/// The wordmark, straight from the prototype. 41 columns; the workspace
+/// hides it rather than clip it when it doesn't fit.
+const WORDMARK: [&str; 3] = [
+    "╔╗╔╔═╗╔╗╔  ╔╗╔╔═╗╔╗ ╦╔═╗  ╔═╗╔═╗╦  ╦ ╦╔╦╗",
+    "║║║║ ║║║║  ║║║║ ║╠╩╗║╚═╗  ╚═╗║ ║║  ║ ║║║║",
+    "╝╚╝╚═╝╝╚╝  ╝╚╝╚═╝╚═╝╩╚═╝  ╚═╝╚═╝╩═╝╚═╝╩ ╩",
+];
+const WORDMARK_WIDTH: u16 = 41;
+/// Three rows of wordmark, a blank, the subtitle, a blank.
+const WORDMARK_HEIGHT: u16 = 6;
+
 pub fn draw(frame: &mut Frame, tui: &Tui) {
+    // Reset to the terminal's own background before anything else, so no
+    // colour from a previous frame survives in the gaps between tiles.
+    frame.render_widget(Block::new().style(Style::default().bg(tui.theme.bg)), frame.area());
+
     let [top, body, bottom] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+        Layout::vertical([Constraint::Length(BAR), Constraint::Min(0), Constraint::Length(BAR)]).areas(frame.area());
 
     context_bar(frame, top, tui);
     statusline(frame, bottom, tui);
 
     let columns = if body.width < NARROW {
-        vec![Constraint::Length(20), Constraint::Min(0)]
+        vec![Constraint::Length(24), Constraint::Min(0)]
     } else {
-        vec![Constraint::Length(22), Constraint::Min(0), Constraint::Length(32)]
+        vec![Constraint::Length(26), Constraint::Min(0), Constraint::Length(32)]
     };
     let panes = Layout::horizontal(columns).split(body);
     modules_pane(frame, panes[0], tui);
@@ -46,41 +70,85 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
 
 // ---- chrome --------------------------------------------------------------
 
+/// A tile. Rounded on every panel — the focused one is told apart by the
+/// accent border and its lit title, not by a heavier line, which is what
+/// keeps the mosaic from jumping as focus moves.
 fn panel<'a>(title: String, focused: bool, tui: &Tui) -> Block<'a> {
-    let style = if focused { tui.theme.title() } else { tui.theme.muted() };
+    let (border, title_style) = if focused {
+        (tui.theme.accent(), tui.theme.title())
+    } else {
+        (Style::default().fg(tui.theme.border), tui.theme.muted())
+    };
     Block::bordered()
-        .border_type(if focused { BorderType::Thick } else { BorderType::Plain })
-        .border_style(if focused { tui.theme.accent() } else { tui.theme.muted() })
-        .title(Line::from(format!(" {title} ")).style(style))
+        .border_type(BorderType::Rounded)
+        .border_style(border)
+        .style(tui.theme.base())
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(title.to_uppercase(), title_style),
+            Span::raw(" "),
+        ]))
 }
 
-fn context_bar(frame: &mut Frame, area: Rect, tui: &Tui) {
-    let editing_form = tui.form.as_ref().is_some_and(|form| form.editing);
-    let mode = if tui.help {
+/// The framed box the two bars share: same rounded border, same fill.
+fn bar_block<'a>(tui: &Tui) -> Block<'a> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(tui.theme.border))
+        .style(tui.theme.base())
+}
+
+fn separator<'a>(tui: &Tui) -> Span<'a> {
+    Span::styled("│", Style::default().fg(tui.theme.border))
+}
+
+fn mode_id(tui: &Tui) -> &'static str {
+    if tui.help {
         "mode_help"
     } else if tui.filtering {
         "mode_filter"
     } else if tui.editing_yield {
         "mode_yield"
-    } else if editing_form {
+    } else if tui.form.as_ref().is_some_and(|form| form.editing) {
         "mode_edit"
     } else {
         "mode_nav"
-    };
-    let lot = tui.lots.get(tui.lot_idx).map(|lot| lot.field_id.clone());
-    let mut spans = vec![
-        Span::styled(format!(" {} ", tui.i18n.t(mode)), tui.theme.selected()),
-        Span::raw(" non·nobis·solum "),
-        Span::styled(format!("· {} ", tui.i18n.t("app_subtitle")), tui.theme.muted()),
-        Span::styled(format!("· {} {} ", tui.i18n.t("st_profile"), tui.cfg.profile), tui.theme.accent()),
-    ];
-    if let Some(field_id) = lot {
-        spans.push(Span::raw(format!("· {} {field_id} ", tui.i18n.t("st_lot"))));
-        if let Some(crop) = tui.active_crop() {
-            spans.push(Span::raw(format!("· {crop} ")));
-        }
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn context_bar(frame: &mut Frame, area: Rect, tui: &Tui) {
+    let block = bar_block(tui);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut spans = vec![
+        Span::styled(format!(" {} ", tui.i18n.t(mode_id(tui))), tui.theme.badge(tui.theme.accent)),
+        separator(tui),
+        Span::styled(" ▸ ", tui.theme.accent()),
+        Span::styled(format!("{} ", screen_title(tui)), tui.theme.title()),
+        separator(tui),
+        Span::styled(" non·nobis·solum ", tui.theme.strong()),
+        separator(tui),
+        Span::styled(format!(" {} ", tui.cfg.profile), tui.theme.strong()),
+    ];
+    if let Some(lot) = tui.lots.get(tui.lot_idx) {
+        spans.push(separator(tui));
+        spans.push(Span::styled(format!(" {} ", tui.i18n.t("st_lot")), tui.theme.muted()));
+        spans.push(Span::styled(lot.field_id.clone(), tui.theme.strong()));
+        if let Some(crop) = tui.active_crop() {
+            spans.push(Span::styled(format!(" · {crop}"), tui.theme.ok()));
+        }
+        spans.push(Span::raw(" "));
+    }
+
+    let version = format!(" v{} ", env!("CARGO_PKG_VERSION"));
+    let right = (version.chars().count() as u16 + 1).min(inner.width);
+    let [left_area, right_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(right)]).areas(inner);
+    frame.render_widget(Paragraph::new(Line::from(spans)), left_area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![separator(tui), Span::styled(version, tui.theme.muted())])),
+        right_area,
+    );
 }
 
 fn statusline(frame: &mut Frame, area: Rect, tui: &Tui) {
@@ -99,39 +167,58 @@ fn statusline(frame: &mut Frame, area: Rect, tui: &Tui) {
 }
 
 fn statusline_with(frame: &mut Frame, area: Rect, tui: &Tui, hint: &str) {
-    let left = Line::from(vec![
-        Span::styled(format!(" {} ", screen_title(tui)), tui.theme.accent()),
-        Span::styled(tui.i18n.t(hint).to_string(), tui.theme.muted()),
-    ]);
-    let message = Span::styled(
-        format!("{} ", tui.message),
-        if tui.is_error { tui.theme.error() } else { tui.theme.ok() },
-    );
+    let block = bar_block(tui);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let width = (tui.message.chars().count() + 1).min(area.width as usize) as u16;
-    let [left_area, right_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(area);
+    let left = Line::from(vec![
+        Span::styled(format!(" {} ", tui.i18n.t(mode_id(tui))), tui.theme.badge(tui.theme.ok)),
+        separator(tui),
+        Span::styled(format!(" {} ", screen_title(tui).to_lowercase()), tui.theme.strong()),
+        separator(tui),
+        Span::styled(format!(" {} ", tui.i18n.t(hint)), tui.theme.muted()),
+    ]);
+    // The dot carries the severity, so the message itself stays readable
+    // rather than being painted red end to end.
+    let message = Line::from(vec![
+        separator(tui),
+        Span::styled(" ● ", if tui.is_error { tui.theme.error() } else { tui.theme.ok() }),
+        Span::styled(
+            format!("{} ", tui.message),
+            if tui.is_error { tui.theme.error() } else { tui.theme.strong() },
+        ),
+    ]);
+
+    let width = (tui.message.chars().count() as u16 + 5).min(inner.width);
+    let [left_area, right_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(inner);
     frame.render_widget(Paragraph::new(left), left_area);
-    frame.render_widget(Paragraph::new(Line::from(message)).right_aligned(), right_area);
+    frame.render_widget(Paragraph::new(message), right_area);
 }
 
 fn modules_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
-    let inner = area.width.saturating_sub(2) as usize;
+    // Two borders and the selection marker; what is left is the row.
+    let inner = area.width.saturating_sub(3) as usize;
     let items: Vec<ListItem> = MODULES
         .iter()
-        .map(|(label, mnemonic, _)| {
-            let label = format!(" {}", tui.i18n.t(label));
-            let key = format!("{mnemonic} ");
-            let gap = inner.saturating_sub(label.chars().count() + key.chars().count());
+        .map(|(label, mnemonic, target, glyph)| {
+            // The module whose screen is open keeps a lit glyph even when
+            // the cursor has moved on, so "where am I" survives browsing.
+            let current = *target == Some(tui.screen);
+            let label = tui.i18n.t(label);
+            // Glyph, its space, the mnemonic and its trailing space.
+            let gap = inner.saturating_sub(label.chars().count() + 4);
             ListItem::new(Line::from(vec![
-                Span::raw(label),
+                Span::styled(format!("{glyph} "), if current { tui.theme.accent() } else { tui.theme.muted() }),
+                Span::raw(label.to_string()),
                 Span::raw(" ".repeat(gap)),
-                Span::styled(key, tui.theme.muted()),
+                Span::styled(format!("{mnemonic} "), tui.theme.muted()),
             ]))
         })
         .collect();
 
     let list = List::new(items)
         .block(panel(tui.i18n.t("modules").to_string(), tui.focus_modules, tui))
+        .highlight_symbol(MARKER)
         .highlight_style(if tui.focus_modules { tui.theme.selected() } else { tui.theme.accent() });
     frame.render_stateful_widget(list, area, &mut ListState::default().with_selected(Some(tui.module_idx)));
 }
@@ -144,8 +231,8 @@ fn status_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
     if let Some(lot) = tui.lots.get(tui.lot_idx) {
         let crop = crop_of(tui, lot);
         lines.push(field(tui, "st_lot", lot.field_id.clone()));
-        lines.push(field(tui, "col_yield", yield_of(tui, lot, &crop, true)));
-        lines.push(field(tui, "col_crop", crop));
+        lines.push(field(tui, "st_yield", yield_of(tui, lot, &crop, true)));
+        lines.push(field(tui, "st_crop", crop));
     }
     if let Some(inspection) = &tui.inspection {
         let context = &inspection.field_context;
@@ -236,10 +323,61 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     );
 }
 
+/// The wordmark, borrowed from the "Cuarzo" direction the prototype
+/// explicitly keeps as Estrato's welcome screen. Shown only where it fits
+/// whole — a clipped wordmark is worse than none.
+fn wordmark(frame: &mut Frame, area: Rect, tui: &Tui) {
+    let mut lines: Vec<Line> = WORDMARK.iter().map(|art| Line::styled(*art, tui.theme.title())).collect();
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(subtitle(tui), tui.theme.muted()));
+    frame.render_widget(Paragraph::new(lines).centered(), area);
+}
+
+/// The line under the wordmark. Wider than the art itself, which is why
+/// [`banner_width`] and not `WORDMARK_WIDTH` is what decides whether the
+/// banner fits.
+fn subtitle(tui: &Tui) -> String {
+    let mut line = format!("{} · v{}", tui.i18n.t("app_subtitle").to_uppercase(), env!("CARGO_PKG_VERSION"));
+    if let Some(user) = current_user() {
+        line.push_str(&format!(" · {}", user.to_uppercase()));
+    }
+    line
+}
+
+/// Whoever is running this. `USER` is what a login shell sets and `LOGNAME`
+/// is the POSIX spelling some environments set instead; a session with
+/// neither (a bare service manager, a container) simply loses the segment
+/// rather than greeting an empty name.
+fn current_user() -> Option<String> {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn banner_width(tui: &Tui) -> u16 {
+    WORDMARK_WIDTH.max(subtitle(tui).chars().count() as u16)
+}
+
 fn dashboard(frame: &mut Frame, area: Rect, tui: &Tui) {
     let block = panel(tui.i18n.t("dashboard_title").to_string(), !tui.focus_modules, tui);
     if tui.lots.is_empty() {
         return frame.render_widget(empty(tui, "no_lots").block(block), area);
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // The banner gives way to the lot table the moment the table would be
+    // squeezed: header plus four rows is the floor worth keeping.
+    let banner = if inner.width >= banner_width(tui) && inner.height >= WORDMARK_HEIGHT + 5 {
+        WORDMARK_HEIGHT
+    } else {
+        0
+    };
+    let [banner_area, table_area] =
+        Layout::vertical([Constraint::Length(banner), Constraint::Min(0)]).areas(inner);
+    if banner > 0 {
+        wordmark(frame, banner_area, tui);
     }
 
     let rows: Vec<Row> = tui
@@ -255,9 +393,9 @@ fn dashboard(frame: &mut Frame, area: Rect, tui: &Tui) {
             };
             let goal = yield_of(tui, lot, &crop, selected);
             Row::new(vec![
-                Cell::from(lot.field_id.clone()),
+                Cell::from(Span::styled(lot.field_id.clone(), tui.theme.accent())),
                 Cell::from(crop),
-                Cell::from(goal),
+                Cell::from(Span::styled(goal, tui.theme.ok())),
                 Cell::from(Span::styled(
                     format!("{} · {}", lot.texture, lot.irrigation_system),
                     tui.theme.muted(),
@@ -271,9 +409,9 @@ fn dashboard(frame: &mut Frame, area: Rect, tui: &Tui) {
         [Constraint::Length(12), Constraint::Min(14), Constraint::Length(14), Constraint::Length(26)],
     )
     .header(header(tui, &["col_lot", "col_crop", "col_yield", "col_soil"]))
-        .row_highlight_style(tui.theme.selected())
-        .block(block);
-    frame.render_stateful_widget(table, area, &mut TableState::default().with_selected(Some(tui.lot_idx)));
+    .highlight_symbol(Span::styled(MARKER, tui.theme.accent()))
+    .row_highlight_style(tui.theme.selected());
+    frame.render_stateful_widget(table, table_area, &mut TableState::default().with_selected(Some(tui.lot_idx)));
 }
 
 fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
@@ -301,7 +439,7 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
         .iter()
         .map(|crop| {
             Row::new(vec![
-                Cell::from(crop.crop_id.clone()),
+                Cell::from(Span::styled(crop.crop_id.clone(), tui.theme.accent())),
                 Cell::from(crop.name.clone()),
                 Cell::from(crop.crop_type.clone()),
                 Cell::from(Span::styled(crop.family.clone(), tui.theme.muted())),
@@ -313,6 +451,7 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
         [Constraint::Length(16), Constraint::Min(16), Constraint::Length(12), Constraint::Length(14)],
     )
     .header(header(tui, &["col_crop_id", "col_name", "col_type", "col_family"]))
+    .highlight_symbol(Span::styled(MARKER, tui.theme.accent()))
     .row_highlight_style(tui.theme.selected());
     frame.render_stateful_widget(table, table_area, &mut TableState::default().with_selected(Some(tui.crop_idx)));
 }
@@ -360,10 +499,7 @@ fn plan(frame: &mut Frame, area: Rect, tui: &Tui) {
                 Cell::from(format!("{:.1}", entry.availability_kg_ha)),
                 Cell::from(format!("{:.0}%", entry.efficiency_used * 100.0)),
                 Cell::from(format!("{:.1}", entry.net_requirement_kg_ha)),
-                Cell::from(Span::styled(
-                    bar(entry.net_requirement_kg_ha, entry.demand_kg_ha, 10),
-                    tui.theme.accent(),
-                )),
+                Cell::from(bar(tui, entry.net_requirement_kg_ha, entry.demand_kg_ha, 10)),
                 Cell::from(soil_status_span(tui, entry.soil_status)),
                 Cell::from(dose),
             ])
@@ -500,14 +636,14 @@ fn inspect(frame: &mut Frame, area: Rect, tui: &Tui) {
     }
 
     // Known gap: reference data exists for these, no use case consumes it.
+    // One row for all six — six copies of the same sentence was six rows of
+    // a scrolling page saying one thing.
     lines.push(Line::raw(""));
     lines.push(Line::styled(tui.i18n.t("inspect_micronutrients").to_string(), tui.theme.title()));
-    for nutrient in UNPLANNED_MICRONUTRIENTS {
-        lines.push(Line::styled(
-            format!("  {:<4} {}", nutrient, tui.i18n.t("inspect_not_planned")),
-            tui.theme.muted(),
-        ));
-    }
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {}  ", UNPLANNED_MICRONUTRIENTS.join(" · ")), tui.theme.warn()),
+        Span::styled(tui.i18n.t("inspect_not_planned").to_string(), tui.theme.muted()),
+    ]));
 
     frame.render_widget(Paragraph::new(lines).block(block).scroll((tui.scroll, 0)), area);
 }
@@ -632,14 +768,20 @@ fn screen_title(tui: &Tui) -> &str {
     })
 }
 
+/// Column headings, the prototype's `table.t th`. Uppercase is what sets
+/// them apart from the data — they used to be dimmed as well, which on a
+/// terminal with a wallpaper simply deleted them.
 fn header<'a>(tui: &Tui, ids: &[&str]) -> Row<'a> {
-    Row::new(ids.iter().map(|id| Cell::from(tui.i18n.t(id).to_string())).collect::<Vec<_>>()).style(tui.theme.muted())
+    Row::new(ids.iter().map(|id| Cell::from(tui.i18n.t(id).to_uppercase())).collect::<Vec<_>>())
+        .style(tui.theme.muted())
+        .bottom_margin(1)
 }
 
+/// `label   value` — the value is the one carrying the emphasis.
 fn field<'a>(tui: &Tui, id: &str, value: String) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{:<18}", tui.i18n.t(id)), tui.theme.muted()),
-        Span::raw(value),
+        Span::styled(value, tui.theme.strong()),
     ])
 }
 
@@ -647,27 +789,36 @@ fn empty<'a>(tui: &Tui, id: &str) -> Paragraph<'a> {
     Paragraph::new(Line::styled(format!(" {}", tui.i18n.t(id)), tui.theme.muted()))
 }
 
-/// `[active] other other` — the bracketed one is the current value.
+/// The current value is a filled chip, the rest stay muted text. The `▸`
+/// carries the same information in glyph form because the row highlight
+/// patches over both colours — and the selected row is exactly the one
+/// whose active value has to stay readable.
 fn toggle(tui: &Tui, options: &[String], active: &str) -> Vec<Span<'static>> {
     options
         .iter()
         .map(|option| {
             if option == active {
-                Span::styled(format!("[{option}] "), tui.theme.accent())
+                Span::styled(format!("▸{option} "), tui.theme.badge(tui.theme.accent))
             } else {
-                Span::styled(format!("{option} "), tui.theme.muted())
+                Span::styled(format!(" {option} "), tui.theme.muted())
             }
         })
         .collect()
 }
 
-fn bar(value: f64, total: f64, width: usize) -> String {
+/// Filled in the accent, the remainder in the border colour — the prototype's
+/// `████░░░░` reads as one bar only when the two halves differ in weight,
+/// not just in glyph.
+fn bar<'a>(tui: &Tui, value: f64, total: f64, width: usize) -> Line<'a> {
     let filled = if total > 0.0 {
         ((value / total) * width as f64).round().clamp(0.0, width as f64) as usize
     } else {
         0
     };
-    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+    Line::from(vec![
+        Span::styled("█".repeat(filled), tui.theme.accent()),
+        Span::styled("░".repeat(width - filled), Style::default().fg(tui.theme.border)),
+    ])
 }
 
 fn soil_status_span<'a>(tui: &Tui, status: Option<SoilStatus>) -> Span<'a> {
@@ -760,16 +911,30 @@ mod tests {
             // 80x24 drops the status column; 130x40 shows all three.
             for (width, height) in [(80, 24), (130, 40)] {
                 let out = render(&tui, width, height);
-                assert!(out.contains("Modules"), "{screen:?} at {width}x{height} lost the module column");
+                assert!(out.contains("MODULES"), "{screen:?} at {width}x{height} lost the module column");
             }
         }
 
         tui.screen = Screen::Inspect;
-        let inspect = render(&tui, 130, 40);
+        // Tall enough for the whole page: the inspect screen scrolls, and
+        // the micronutrient block sits at its very bottom, so a terminal
+        // that fits everything is what proves the block is rendered rather
+        // than dropped.
+        let inspect = render(&tui, 130, 60);
         assert!(inspect.contains("Micronutrients"), "the unplanned-micronutrient rows must stay visible");
 
         tui.help = true;
-        assert!(render(&tui, 80, 24).contains("Keybindings"), "the help overlay must fit an 80x24 terminal");
+        assert!(render(&tui, 80, 24).contains("KEYBINDINGS"), "the help overlay must fit an 80x24 terminal");
+    }
+
+    /// The banner is the one piece of chrome allowed to disappear, and it
+    /// has to disappear whole — a half-drawn wordmark is worse than none.
+    #[test]
+    fn the_wordmark_shows_when_it_fits_and_is_dropped_when_it_does_not() {
+        let tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        assert!(render(&tui, 130, 40).contains(WORDMARK[0]), "a roomy terminal must show the wordmark");
+        assert!(!render(&tui, 60, 40).contains(WORDMARK[0]), "too narrow: drop it, don't clip it");
+        assert!(!render(&tui, 130, 14).contains(WORDMARK[0]), "too short: the lot table wins the space");
     }
 
     /// The longest list the form can unfold is the 66-crop catalog; it has
@@ -786,7 +951,7 @@ mod tests {
             assert!(tui.picker.is_some(), "{label} must unfold a list");
             for (width, height) in [(80, 24), (130, 40)] {
                 let out = render(&tui, width, height);
-                assert!(out.contains("Modules"), "{label} at {width}x{height} lost the module column");
+                assert!(out.contains("MODULES"), "{label} at {width}x{height} lost the module column");
             }
             tui.picker = None;
         }
@@ -803,10 +968,18 @@ mod tests {
 
     #[test]
     fn bar_is_proportional_and_never_overflows() {
-        assert_eq!(bar(0.0, 100.0, 4), "░░░░");
-        assert_eq!(bar(50.0, 100.0, 4), "██░░");
-        assert_eq!(bar(100.0, 100.0, 4), "████");
-        assert_eq!(bar(500.0, 100.0, 4), "████", "over-100% must clamp, not panic");
-        assert_eq!(bar(10.0, 0.0, 4), "░░░░", "no demand must not divide by zero");
+        let tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        // The two halves carry different styles, so the assertion is on the
+        // glyphs the line ends up painting.
+        let glyphs = |value, total| {
+            bar(&tui, value, total, 4).spans.iter().map(|span| span.content.to_string()).collect::<String>()
+        };
+        assert_eq!(glyphs(0.0, 100.0), "░░░░");
+        assert_eq!(glyphs(50.0, 100.0), "██░░");
+        assert_eq!(glyphs(100.0, 100.0), "████");
+        assert_eq!(glyphs(500.0, 100.0), "████", "over-100% must clamp, not panic");
+        assert_eq!(glyphs(10.0, 0.0), "░░░░", "no demand must not divide by zero");
     }
 }
+
+

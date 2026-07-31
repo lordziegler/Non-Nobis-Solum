@@ -44,16 +44,18 @@ pub enum Screen {
     Settings,
 }
 
-/// Left navigation column: label id, mnemonic, target screen (`None` quits).
-const MODULES: [(&str, char, Option<Screen>); 8] = [
-    ("module_home", 'h', Some(Screen::Dashboard)),
-    ("module_plan", 'f', Some(Screen::Plan)),
-    ("module_crops", 'c', Some(Screen::Crops)),
-    ("module_inspect", 'i', Some(Screen::Inspect)),
-    ("module_new_lot", 'n', Some(Screen::NewLot)),
-    ("module_new_sample", 's', Some(Screen::NewSample)),
-    ("module_settings", ',', Some(Screen::Settings)),
-    ("module_quit", 'q', None),
+/// Left navigation column: label id, mnemonic, target screen (`None`
+/// quits), glyph. The glyphs are the prototype's — all single-width, text
+/// presentation, so no terminal renders them as a double-cell emoji.
+const MODULES: [(&str, char, Option<Screen>, &str); 8] = [
+    ("module_home", 'h', Some(Screen::Dashboard), "⌂"),
+    ("module_plan", 'f', Some(Screen::Plan), "◈"),
+    ("module_crops", 'c', Some(Screen::Crops), "▤"),
+    ("module_inspect", 'i', Some(Screen::Inspect), "✦"),
+    ("module_new_lot", 'n', Some(Screen::NewLot), "+"),
+    ("module_new_sample", 's', Some(Screen::NewSample), "✎"),
+    ("module_settings", ',', Some(Screen::Settings), "⚙"),
+    ("module_quit", 'q', None, "⏻"),
 ];
 
 /// The "add lot" form, in `LotRegistration` field order. Label ids double
