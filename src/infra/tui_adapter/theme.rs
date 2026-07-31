@@ -182,12 +182,17 @@ impl Theme {
         Style::default().fg(self.warn)
     }
 
-    /// Selected row: a lifted background where the palette owns one, which
+    /// Selected row: a lifted background where the palette names one, which
     /// leaves the row's per-cell colours intact. Reverse video otherwise —
     /// the one highlight legible against a background this theme has
     /// deliberately not named.
+    ///
+    /// This asks about `sel_bg`, not about [`Theme::owns_background`]: a
+    /// palette may well leave the page to the terminal and still name the
+    /// colour it wants *one row* lifted to. Painting a solid highlight over
+    /// a transparent page is exactly what a highlight is for.
     pub fn selected(&self) -> Style {
-        if self.owns_background() {
+        if self.sel_bg != Color::Reset {
             Style::default().fg(self.sel_fg).bg(self.sel_bg).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(self.accent).add_modifier(Modifier::REVERSED)
@@ -208,21 +213,33 @@ impl Theme {
 mod tests {
     use super::*;
 
-    /// The rule the whole module exists to enforce: a palette that has not
-    /// named its background must not name a highlight background either,
-    /// and one that has must not fall back to reverse video.
+    /// The rule the whole module exists to enforce: a style may only name a
+    /// background colour it actually knows. The badge writes the page
+    /// colour *onto* the role colour, so it needs `bg`; a selected row only
+    /// needs the one colour it lifts to. Neither may guess.
     #[test]
-    fn a_highlight_names_a_background_only_when_the_theme_owns_one() {
+    fn a_style_names_a_background_only_where_the_theme_named_one() {
         for theme in THEMES {
             let selected = theme.selected();
             let badge = theme.badge(theme.accent);
-            if theme.owns_background() {
-                assert!(selected.bg.is_some() && badge.bg.is_some(), "{} must lift, not reverse", theme.name);
-            } else {
-                assert!(selected.bg.is_none() && badge.bg.is_none(), "{} must not name a background", theme.name);
+
+            assert_eq!(
+                selected.bg.is_some(),
+                theme.sel_bg != Color::Reset,
+                "{}: a row may lift exactly when sel_bg says where to",
+                theme.name
+            );
+            assert_eq!(
+                badge.bg.is_some(),
+                theme.owns_background(),
+                "{}: a badge may fill exactly when the page colour is known",
+                theme.name
+            );
+
+            for (style, what) in [(selected, "selection"), (badge, "badge")] {
                 assert!(
-                    selected.add_modifier.contains(Modifier::REVERSED),
-                    "{} needs reverse video to stay legible",
+                    style.bg.is_some() || style.add_modifier.contains(Modifier::REVERSED),
+                    "{}: the {what} has neither a background nor reverse video, so it is invisible",
                     theme.name
                 );
             }
