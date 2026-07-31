@@ -1,14 +1,8 @@
-//! Listing the curated lots, so a front-end never has to read
-//! `data/curated/` itself.
-
 use crate::core::domain::{DomainError, IrrigationSystem, Texture, YieldTarget};
 use crate::core::ports::{FieldContextRepository, ListLotsPort, YieldTargetRepository};
 
-/// A lot as a picker needs it: what it is, plus whatever is already
-/// planned on it.
-///
-/// `curated_targets` is empty for a lot that was registered without a
-/// planning row — a perfectly normal state, and the reason the lot list
+/// A lot as a picker needs it. `curated_targets` is empty for a lot
+/// registered without a planning row — a normal state, and why the list
 /// comes from the field contexts rather than from `yield_targets.csv`.
 #[derive(Debug, Clone)]
 pub struct LotSummary {
@@ -16,8 +10,8 @@ pub struct LotSummary {
     pub texture: Texture,
     pub irrigation_system: IrrigationSystem,
     pub curated_targets: Vec<(String, YieldTarget)>,
-    /// Carried so a front-end can warm a climatology for the lot before
-    /// anyone asks for a plan. `None` for a lot with no surveyed position.
+    /// Carried so a front-end can warm a climatology before a plan is
+    /// asked for. `None` for a lot with no surveyed position.
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
 }

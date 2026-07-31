@@ -1,9 +1,7 @@
 //! In-memory memoization for any `AgroclimaticRepository`.
 //!
 //! A 30-year climatology does not change while the process runs, so this
-//! needs no TTL and no invalidation — unlike the sibling `vigil`
-//! project's `TtlCache`, which caches *current* weather and therefore has
-//! to expire. Nothing is written to disk.
+//! needs no TTL and no invalidation. Nothing is written to disk.
 //!
 //! A poisoned mutex is treated as a cache miss rather than a panic:
 //! caching is an optimization and must never be able to fail a plan.
@@ -23,14 +21,12 @@ fn cache_key(latitude: f64, longitude: f64) -> CacheKey {
     ((latitude * 100.0).round() as i64, (longitude * 100.0).round() as i64)
 }
 
-/// Wraps any `AgroclimaticRepository` and serves repeat lookups of the
-/// same coordinates from memory. Useful for a long-lived front-end
-/// planning several crops on one lot; a single CLI run never hits it
-/// twice.
+/// Serves repeat lookups of the same coordinates from memory. For a
+/// long-lived front-end planning several crops on one lot; a single CLI
+/// run never hits it twice.
 ///
-/// `Send + Sync` on the inner repository is what lets the same cache be
-/// filled by a background thread and read by the render loop — see
-/// [`PrewarmedAgroclimaticRepo`].
+/// `Send + Sync` on the inner repository is what lets a background thread
+/// fill the cache while the render loop reads it.
 pub struct CachedAgroclimaticRepo {
     inner: Box<dyn AgroclimaticRepository + Send + Sync>,
     entries: Mutex<HashMap<CacheKey, AnnualClimatology>>,
@@ -50,11 +46,9 @@ impl CachedAgroclimaticRepo {
 /// A non-blocking view over a shared [`CachedAgroclimaticRepo`]: a hit is
 /// returned, a miss is an `ExternalServiceUnavailable` error.
 ///
-/// This exists for the TUI, whose render loop is single-threaded and can
-/// afford exactly zero seconds of a 10 s HTTP timeout. Something else
-/// (the front-end's prefetch thread) fills the cache; a plan asked for
-/// before that lands degrades to baseline constants, which is the same
-/// path an outage already takes.
+/// For the TUI, whose single-threaded render loop can afford zero seconds
+/// of a 10 s HTTP timeout. A plan asked for before the prefetch lands
+/// degrades to baseline constants — the path an outage already takes.
 pub struct PrewarmedAgroclimaticRepo {
     cache: Arc<CachedAgroclimaticRepo>,
 }
@@ -102,7 +96,7 @@ mod tests {
 
     use super::*;
 
-    /// Counts calls so a cache hit is observable, and can be told to fail.
+    /// Counts calls so a cache hit is observable.
     struct CountingRepo {
         calls: AtomicUsize,
         fails: bool,

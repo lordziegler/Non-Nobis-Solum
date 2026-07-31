@@ -1,7 +1,5 @@
-//! Reads `data/reference/<profile>/nutrient_removal.csv` — crop nutrient
-//! removal coefficients from the agronomic literature. This is the table
-//! that makes the whole system possible: nobody re-derives "how much N
-//! does a maize grain crop remove per ton" every time they run a plan.
+//! Reads `data/reference/<profile>/nutrient_removal.csv` — crop removal
+//! coefficients from the agronomic literature.
 
 use std::path::{Path, PathBuf};
 

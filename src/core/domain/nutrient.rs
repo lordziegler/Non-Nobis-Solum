@@ -2,9 +2,8 @@ use super::errors::DomainError;
 use std::fmt;
 use std::str::FromStr;
 
-/// Plant nutrients tracked by the fertility engine. Using an enum instead
-/// of raw strings keeps crop demand tables, soil tests and fertilizer
-/// composition all keyed by the same closed set of values.
+/// An enum rather than raw strings, so demand tables, soil tests and
+/// fertilizer composition are all keyed by the same closed set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Nutrient {
     N,
@@ -35,9 +34,8 @@ impl Nutrient {
     pub const MACRONUTRIENTS: [Nutrient; 6] =
         [Nutrient::N, Nutrient::P, Nutrient::K, Nutrient::S, Nutrient::Ca, Nutrient::Mg];
 
-    /// Every variant, so a front-end can offer the closed set instead of
-    /// asking someone to type an id `from_str` might reject. Same role as
-    /// `Texture::ALL` and `IrrigationSystem::ALL`.
+    /// So a front-end can offer the closed set instead of asking for an id
+    /// `from_str` might reject. Same role as `Texture::ALL`.
     pub const ALL: [Nutrient; 14] = [
         Nutrient::N,
         Nutrient::P,
@@ -109,8 +107,7 @@ impl fmt::Display for Nutrient {
 mod tests {
     use super::*;
 
-    /// A front-end offers `ALL` as the only way to name a nutrient, so a
-    /// variant whose text form doesn't parse back would be unpickable.
+    /// A variant whose text form doesn't parse back would be unpickable.
     #[test]
     fn every_listed_nutrient_parses_back_from_its_own_text() {
         for nutrient in Nutrient::ALL {

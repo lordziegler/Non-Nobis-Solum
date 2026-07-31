@@ -1,9 +1,7 @@
-//! Agroclimatic adapters: the only part of the codebase that talks to a
-//! network. Everything here implements `AgroclimaticRepository`, so a
-//! different provider (Open-Meteo, Agromonitoring) is a new file next to
-//! `nasa_power.rs` and one line in `bootstrap.rs` — `core` never changes.
+//! The only part of the codebase that talks to a network. A different
+//! provider is a new file here plus one line in `bootstrap.rs`.
 //!
-//! Provider adapters are expected to be best-effort: they return
+//! Adapters are best-effort: they return
 //! `DomainError::ExternalServiceUnavailable` and the caller degrades to a
 //! climate-free plan rather than failing.
 

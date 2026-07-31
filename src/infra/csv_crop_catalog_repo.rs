@@ -1,6 +1,4 @@
-//! Reads `data/reference/<profile>/crops.csv` — the crop catalog. Part of
-//! the versioned scientific reference data: the user picks a profile,
-//! never re-types crop metadata.
+//! Reads `data/reference/<profile>/crops.csv` — the crop catalog.
 
 use std::path::{Path, PathBuf};
 

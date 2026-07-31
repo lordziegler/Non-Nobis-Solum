@@ -1,12 +1,9 @@
-//! Appends rows to the curated CSVs under `data/curated/`. The only
-//! adapter in the project that writes.
+//! Appends rows to the curated CSVs. The only adapter that writes.
 //!
-//! Append-only and header-aware: the file is opened in append mode and
-//! written with `has_headers(false)`, so an existing header is never
-//! duplicated and existing rows are never touched. Serialization goes
-//! through `csv::Writer`, which quotes any field containing a comma, a
-//! quote or a newline — hand-formatting these lines is exactly how a
-//! previous session corrupted the curated files.
+//! Opened in append mode with `has_headers(false)`, so an existing header
+//! is never duplicated and existing rows are never touched. Serialization
+//! goes through `csv::Writer`, which quotes any field containing a comma,
+//! a quote or a newline — hand-formatting these lines corrupts the file.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -30,8 +27,7 @@ impl CsvCuratedWriter {
     }
 }
 
-/// Appends whole records, or none of them: the writer is flushed once at
-/// the end, so a mid-record failure can't leave half a line behind.
+/// Flushed once at the end, so a mid-record failure leaves no half line.
 fn append(path: &Path, records: &[Vec<String>]) -> Result<(), DomainError> {
     let file = OpenOptions::new()
         .create(true)
@@ -117,8 +113,8 @@ mod tests {
     use crate::core::ports::{FieldContextRepository, YieldTargetRepository};
     use crate::infra::{CsvFieldContextRepo, CsvSoilTestsRepo, CsvYieldTargetsRepo};
 
-    /// A throwaway copy of the curated files, so the tests write for real
-    /// and read back through the production readers.
+    /// A throwaway copy, so the tests write for real and read back through
+    /// the production readers.
     struct Sandbox {
         dir: PathBuf,
     }
@@ -220,10 +216,8 @@ mod tests {
         assert_eq!(read[0].layer.to_cm, 20.0);
     }
 
-    /// The file is append-only, so correcting a lab value means writing a
-    /// second row for the same nutrient. If the reader kept the first one,
-    /// the correction would be accepted and then silently ignored by every
-    /// plan — the worst failure mode this tool has.
+    /// If the reader kept the first row, a correction would be accepted and
+    /// then silently ignored by every plan — the worst failure this has.
     #[test]
     fn a_corrected_lab_value_supersedes_the_one_it_replaces() {
         use crate::core::domain::{Depth, Nutrient, SoilTest};

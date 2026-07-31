@@ -9,8 +9,8 @@ pub struct Depth {
     pub to_cm: f64,
 }
 
-/// USDA soil texture classes. Drives phosphorus/potassium fixation
-/// assumptions and nitrogen use efficiency in the domain services.
+/// USDA soil texture classes. Drives P/K fixation assumptions and
+/// nitrogen use efficiency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Texture {
     Sand,
@@ -28,8 +28,8 @@ pub enum Texture {
 }
 
 impl Texture {
-    /// Every class, so a front-end can offer the closed set instead of
-    /// re-typing it and drifting from `from_str`.
+    /// So a front-end can offer the closed set instead of drifting from
+    /// `from_str`.
     pub const ALL: [Texture; 12] = [
         Texture::Sand,
         Texture::LoamySand,
@@ -88,7 +88,7 @@ impl fmt::Display for Texture {
     }
 }
 
-/// Water source for the field. Drives nitrogen and potassium use efficiency.
+/// Drives nitrogen and potassium use efficiency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IrrigationSystem {
     Rainfed,
@@ -151,9 +151,8 @@ pub enum SoilStatus {
 mod tests {
     use super::*;
 
-    /// The TUI offers these two sets as the only way to name a texture or
-    /// an irrigation system, so a variant whose `Display` doesn't parse
-    /// back would be offered and then refused on save.
+    /// A variant whose `Display` doesn't parse back would be offered by the
+    /// TUI and then refused on save.
     #[test]
     fn every_listed_texture_and_irrigation_system_parses_back_from_its_own_text() {
         for texture in Texture::ALL {

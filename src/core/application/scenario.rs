@@ -1,9 +1,7 @@
 use crate::core::domain::YieldTarget;
 
-/// Everything a caller must supply to plan a fertilization program: which
-/// sample/field, which crop, and optionally which yield goal (falls back
-/// to `YieldTargetRepository` when not given). No reference data lives
-/// here — that comes entirely from the reference-data ports.
+/// Everything a caller must supply to plan. `yield_override` falls back
+/// to `YieldTargetRepository` when absent; no reference data lives here.
 #[derive(Debug, Clone)]
 pub struct FertilityScenario {
     pub sample_id: String,

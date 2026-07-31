@@ -1,6 +1,5 @@
-//! Command-line interface. Collects only what can't be inferred from the
-//! reference catalog: which lot/sample, which crop, which yield goal (if
-//! not already curated), and which reference profile to trust.
+//! Collects only what the reference catalog can't infer: which lot, which
+//! crop, which yield goal if not already curated, which profile.
 
 use std::path::PathBuf;
 
@@ -153,11 +152,9 @@ fn print_plan(plan: &crate::core::domain::FertilityPlan) {
     }
 }
 
-/// Reports which climate-derived values the plan actually used, and emits
-/// the single stderr warning when it ran without any. Every figure here
-/// is labelled `[climate-adjusted]` or `[baseline]` — the mineralization
-/// factor alone can move N availability by 3x, so the reader must never
-/// have to guess which regime produced a number.
+/// Every figure is labelled `[climate-adjusted]` or `[baseline]`: the
+/// mineralization factor alone moves N availability by up to 3x, so the
+/// reader must never have to guess which regime produced a number.
 fn print_climate(plan: &crate::core::domain::FertilityPlan) {
     let Some(climate) = &plan.climate else {
         eprintln!("[climate] NASA POWER unavailable — running without climate enrichment");
@@ -167,8 +164,8 @@ fn print_climate(plan: &crate::core::domain::FertilityPlan) {
 
     match climate.mean_temp_c {
         Some(temp) => println!("N mineralization factor: {:.4}  [climate-adjusted, T={temp:.1}°C]", plan.mineralization_factor),
-        // Reachable: the climatology arrived but without a usable T2M, so
-        // the factor fell back to baseline even though climate is present.
+        // Reachable: climatology arrived without a usable T2M, so the
+        // factor fell back to baseline even though climate is present.
         None => println!("N mineralization factor: {:.4}  [baseline — climatology has no mean temperature]", plan.mineralization_factor),
     }
 

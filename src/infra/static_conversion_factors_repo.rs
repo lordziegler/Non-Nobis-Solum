@@ -1,6 +1,5 @@
-//! Reads `conversion_factors.toml` — unit and chemical-form conversions
-//! (cmolc/kg -> mg/kg, elemental -> oxide form). Loaded once at startup
-//! and kept in memory: it never changes during a run.
+//! Reads `conversion_factors.toml` — unit and chemical-form conversions,
+//! loaded once and kept in memory.
 
 use std::collections::HashMap;
 use std::path::Path;

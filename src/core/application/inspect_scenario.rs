@@ -5,8 +5,7 @@ use crate::core::ports::{
     NutrientRemovalRepository, SoilTestRepository, YieldTargetRepository,
 };
 
-/// Per-nutrient provenance shown by `InspectScenario`: where each number
-/// used in the plan actually comes from.
+/// Where each number used in the plan comes from.
 #[derive(Debug, Clone)]
 pub struct NutrientProvenance {
     pub nutrient: Nutrient,
@@ -15,9 +14,7 @@ pub struct NutrientProvenance {
     pub critical_level: Option<CriticalLevel>,
 }
 
-/// Full picture of the data behind a scenario, without computing doses —
-/// useful to answer "where do these numbers come from?" before trusting
-/// a plan.
+/// The data behind a scenario, without computing doses.
 #[derive(Debug, Clone)]
 pub struct ScenarioInspection {
     pub field_context: FieldContext,

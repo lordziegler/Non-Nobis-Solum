@@ -1,5 +1,4 @@
-//! Reads `data/reference/<profile>/fertilizer_sources.csv` — commercial
-//! fertilizer products and their nutrient composition. One row per
+//! Reads `data/reference/<profile>/fertilizer_sources.csv`. One row per
 //! (source, nutrient) pair, grouped by `source_id` on load.
 
 use std::path::{Path, PathBuf};

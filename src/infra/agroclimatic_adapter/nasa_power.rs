@@ -1,13 +1,10 @@
-//! NASA POWER client: 30-year monthly climatology for a point.
+//! NASA POWER client: 30-year monthly climatology for a point. No API key.
 //!
-//! No API key. The response is a monthly series per parameter, keyed
-//! `"JAN"`..`"DEC"` plus an `"ANN"` aggregate; this adapter reduces it to
-//! the annual figures the domain consumes and throws the rest away.
+//! The response is a monthly series per parameter, keyed `"JAN"`..`"DEC"`
+//! plus an `"ANN"` aggregate; this reduces it to the annual figures the
+//! domain consumes and throws the rest away.
 //!
 //! API docs: <https://power.larc.nasa.gov/docs/services/api/temporal/climatology/>
-//!
-//! The wire-format structs and the sentinel handling below follow the
-//! same shape as the sibling `vigil` project's POWER client.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -25,13 +22,10 @@ const BASE_URL: &str = "https://power.larc.nasa.gov/api/temporal/climatology/poi
 /// that survived a JSON round-trip is not guaranteed to compare equal.
 const FILL: f64 = -999.0;
 
-/// Requested parameters, in POWER's vocabulary.
-///
-/// `ET0_PENMAN` from the original brief is **not** requested: no such
-/// parameter exists in the AG community, and including it makes POWER
-/// reject the entire request with HTTP 422 rather than return a fill
-/// value for that one field. `TOA_SW_DWN` is requested in its place, as
-/// the Ra term of a Hargreaves ET0 (see `climatology_from`).
+/// `ET0_PENMAN` is **not** requested: no such parameter exists in the AG
+/// community, and including it makes POWER reject the whole request with
+/// HTTP 422 rather than fill that one field. `TOA_SW_DWN` takes its place,
+/// as the Ra term of a Hargreaves ET0.
 const PARAMETERS: &str = "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN,ALLSKY_SFC_SW_DWN,RH2M,WS2M,TOA_SW_DWN";
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -81,8 +75,7 @@ impl AgroclimaticRepository for NasaPowerRepo {
     }
 }
 
-/// Parses a POWER climatology payload into the domain struct. Split out
-/// from the HTTP call so the reduction logic is testable offline.
+/// Split out from the HTTP call so the reduction is testable offline.
 pub fn climatology_from(body: &str) -> Result<AnnualClimatology, DomainError> {
     let raw: PowerResponse = serde_json::from_str(body)
         .map_err(|e| DomainError::ExternalServiceUnavailable(format!("could not decode NASA POWER response: {e}")))?;
@@ -166,9 +159,8 @@ struct PowerProperties {
 mod tests {
     use super::*;
 
-    /// Trimmed real response for LOT-001's coordinates (1.2136, -77.2811).
-    /// Monthly values are the genuine ones; `MAR` carries a -999 fill in
-    /// `RH2M` to exercise the sentinel path.
+    /// Trimmed real response for (1.2136, -77.2811). `MAR` carries a -999
+    /// fill in `RH2M` to exercise the sentinel path.
     const PASTO: &str = r#"{
       "properties": { "parameter": {
         "T2M": {"JAN":13.29,"FEB":13.32,"MAR":13.4,"APR":13.4,"MAY":13.37,"JUN":13.11,

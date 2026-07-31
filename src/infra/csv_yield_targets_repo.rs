@@ -1,6 +1,5 @@
-//! Reads `data/curated/yield_targets.csv` — planning-cycle yield goals
-//! per field and crop. Used only as a fallback when the caller doesn't
-//! supply an explicit yield override.
+//! Reads `data/curated/yield_targets.csv` — yield goals per field and
+//! crop, used only when the caller supplies no explicit override.
 
 use std::path::{Path, PathBuf};
 
@@ -49,8 +48,8 @@ impl YieldTargetRepository for CsvYieldTargetsRepo {
         let mut reader = csv::Reader::from_path(&self.path)
             .map_err(|e| DomainError::DataSource(format!("{}: {e}", self.path.display())))?;
 
-        // Same last-wins collapse as `get_yield_target`, so a front-end
-        // listing the lots can't show a goal the planner won't use.
+        // Same last-wins collapse, so a front-end can't list a goal the
+        // planner won't use.
         let mut targets: Vec<LotYieldTarget> = Vec::new();
         for row in reader.deserialize::<YieldTargetRow>() {
             let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;

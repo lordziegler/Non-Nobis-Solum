@@ -1,8 +1,6 @@
-//! Reads `data/reference/<profile>/liming_materials.csv` — commercial
-//! liming materials and their neutralizing composition. Same shape as
-//! `CsvFertilizerSourcesRepo`, kept as a separate file/repo because CaO/MgO
-//! grades (neutralizing value) aren't the same thing as elemental Ca/Mg
-//! composition (nutrient supply) — see `LimingMaterial`'s doc comment.
+//! Reads `data/reference/<profile>/liming_materials.csv`. Same shape as
+//! `CsvFertilizerSourcesRepo`, kept separate because CaO/MgO grades
+//! (neutralizing value) are not elemental Ca/Mg (nutrient supply).
 
 use std::path::{Path, PathBuf};
 

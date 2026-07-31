@@ -1,10 +1,8 @@
-//! Composition root helpers: pick a reference profile, instantiate the
-//! concrete adapters for it, and wire them into the use cases. This is
-//! the only place in the codebase that knows about file paths.
+//! Composition root: the only place that knows about file paths.
 //!
-//! Adding a new reference profile (say `usa_midwest`) never touches
-//! `core`: create `data/reference/usa_midwest/` with the same five files
-//! as `global`, and pass `--profile usa_midwest` on the CLI.
+//! Adding a reference profile never touches `core` — create
+//! `data/reference/<name>/` with the same files as `global` and pass
+//! `--profile <name>`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,10 +16,9 @@ use crate::infra::{
     NasaPowerRepo, StaticConversionFactorsRepo, StaticLimingRulesRepo, YamlEfficiencyRulesRepo,
 };
 
-/// Resolves paths for a chosen reference profile plus the fixed curated
-/// data directory. `conversion_factors.toml` is intentionally shared
-/// across every profile: atomic weights and unit conversions are
-/// universal science, not regional agronomy.
+/// Paths for a chosen profile plus the curated directory.
+/// `conversion_factors.toml` is shared across every profile: atomic
+/// weights are universal science, not regional agronomy.
 pub struct DataLayout {
     data_root: PathBuf,
     profile: String,
@@ -45,10 +42,9 @@ impl DataLayout {
     }
 }
 
-/// What a long-lived front-end (the TUI) holds instead of a single wired
-/// use case: the data root plus the profile currently selected. Use cases
-/// are rebuilt from [`App::layout`] on every action, because switching
-/// profile at runtime switches which reference files back them.
+/// What a long-lived front-end holds instead of a wired use case. Use
+/// cases are rebuilt from [`App::layout`] on every action, because
+/// switching profile switches which reference files back them.
 pub struct App {
     pub data_root: PathBuf,
     pub profile: String,
@@ -88,25 +84,17 @@ impl App {
     }
 }
 
-/// The live agroclimatic provider, for a one-shot CLI run: NASA POWER,
-/// uncached — a single run fetches one climatology and exits, so a cache
-/// in front of it would never be read.
+/// For a one-shot CLI run: uncached, because a single run fetches one
+/// climatology and exits.
 ///
-/// Returns `None` rather than an error if the HTTP client can't even be
-/// constructed — at this layer that is indistinguishable from the API
-/// being down, and neither is allowed to stop a plan.
-///
-/// Swapping providers happens here and nowhere else: build a different
-/// `AgroclimaticRepository` and the use case is none the wiser.
+/// `None` rather than an error if the HTTP client can't be built — at this
+/// layer that is the API being down, and neither may stop a plan.
 pub fn build_agroclimatic_repo() -> Option<Box<dyn AgroclimaticRepository>> {
     Some(Box::new(NasaPowerRepo::new().ok()?))
 }
 
-/// The same provider, but as a cache a long-lived front-end can keep and
-/// share with a background thread. The TUI fills this off the render loop
-/// and reads it through [`crate::infra::PrewarmedAgroclimaticRepo`], which
-/// never blocks; a CLI run has nothing to share and uses the function
-/// above instead.
+/// The same provider as a cache a front-end can share with a background
+/// thread, read through [`crate::infra::PrewarmedAgroclimaticRepo`].
 pub fn build_climate_cache() -> Option<Arc<CachedAgroclimaticRepo>> {
     Some(Arc::new(CachedAgroclimaticRepo::new(Box::new(NasaPowerRepo::new().ok()?))))
 }
@@ -132,8 +120,8 @@ pub fn build_calculate_fertility_plan(
     ))
 }
 
-/// Lot picker data. Reads the curated lots themselves, not the planning
-/// rows: a lot exists whether or not a crop is planned on it.
+/// Reads the curated lots, not the planning rows: a lot exists whether or
+/// not a crop is planned on it.
 pub fn build_list_lots(layout: &DataLayout) -> ListLots {
     ListLots::new(
         Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),
@@ -141,8 +129,8 @@ pub fn build_list_lots(layout: &DataLayout) -> ListLots {
     )
 }
 
-/// The only use case wired to a writer. Curated data is profile-independent,
-/// so this is the same set of files whichever reference profile is active.
+/// The only use case wired to a writer. Curated data is
+/// profile-independent, so the files are the same under any profile.
 pub fn build_register_lot(layout: &DataLayout) -> RegisterLot {
     RegisterLot::new(
         Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),

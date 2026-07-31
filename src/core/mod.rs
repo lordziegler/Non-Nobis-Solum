@@ -1,7 +1,5 @@
-//! Core: domain and application logic, free of any IO or framework
-//! dependency. Everything here is pure Rust — no file paths, no CSV/TOML
-//! parsing, no CLI framework. Adapters in `crate::infra` implement the
-//! traits declared in `ports` and are wired in at the composition root.
+//! Domain and application logic, free of IO and framework dependencies.
+//! Adapters in `crate::infra` implement the traits declared in `ports`.
 
 pub mod application;
 pub mod domain;

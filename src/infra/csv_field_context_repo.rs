@@ -1,6 +1,5 @@
-//! Reads `data/curated/field_context.csv` — physical/chemical context of
-//! a field/lot (texture, irrigation, bulk density...), curated once per
-//! field rather than re-entered on every planning run.
+//! Reads `data/curated/field_context.csv` — texture, irrigation, bulk
+//! density and the rest, curated once per field.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -22,8 +21,7 @@ struct FieldContextRow {
     bulk_density_kg_dm3: f64,
     arable_depth_m: f64,
     region: String,
-    /// Optional so a curated file predating the climate work still loads:
-    /// a lot with no coordinates gets no climate enrichment.
+    /// Optional: a lot with no coordinates gets no climate enrichment.
     #[serde(default)]
     latitude: Option<f64>,
     #[serde(default)]

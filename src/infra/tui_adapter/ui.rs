@@ -1,7 +1,6 @@
-//! Rendering. Layout follows the "Estrato" direction from
-//! `docs/Prototypes/`: context bar on top, fixed module column on the
-//! left, workspace in the middle, status column on the right, modal
-//! statusline at the bottom. Every label goes through `tui.i18n`.
+//! Rendering: context bar on top, module column left, workspace centre,
+//! status column right, statusline at the bottom. Every label goes
+//! through `tui.i18n`.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -15,20 +14,17 @@ use crate::core::application::LotSummary;
 use super::theme;
 use crate::core::domain::SoilStatus;
 
-/// Below this width the status column is dropped rather than squeezed —
-/// an 80x24 terminal keeps modules + workspace intact.
+/// Below this the status column is dropped rather than squeezed, so an
+/// 80x24 terminal keeps modules + workspace intact.
 const NARROW: u16 = 92;
 
-/// Context bar and statusline are framed boxes, like the prototype's, so
-/// each costs a border row above and below its content.
+/// Both bars are framed, so each costs a border row above and below.
 const BAR: u16 = 3;
 
-/// The accent rule down the left edge of a selected row — the terminal
-/// equivalent of the prototype's `inset 2px 0 0 var(--acc)`.
+/// The accent rule down the left edge of a selected row.
 const MARKER: &str = "▎";
 
-/// The wordmark, straight from the prototype. 41 columns; the workspace
-/// hides it rather than clip it when it doesn't fit.
+/// 41 columns; hidden rather than clipped when it doesn't fit.
 const WORDMARK: [&str; 3] = [
     "╔╗╔╔═╗╔╗╔  ╔╗╔╔═╗╔╗ ╦╔═╗  ╔═╗╔═╗╦  ╦ ╦╔╦╗",
     "║║║║ ║║║║  ║║║║ ║╠╩╗║╚═╗  ╚═╗║ ║║  ║ ║║║║",
@@ -39,8 +35,8 @@ const WORDMARK_WIDTH: u16 = 41;
 const WORDMARK_HEIGHT: u16 = 6;
 
 pub fn draw(frame: &mut Frame, tui: &Tui) {
-    // Reset to the terminal's own background before anything else, so no
-    // colour from a previous frame survives in the gaps between tiles.
+    // Reset first, so no colour from a previous frame survives in the gaps
+    // between tiles.
     frame.render_widget(Block::new().style(Style::default().bg(tui.theme.bg)), frame.area());
 
     let [top, body, bottom] =
@@ -71,9 +67,8 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
 
 // ---- chrome --------------------------------------------------------------
 
-/// A tile. Rounded on every panel — the focused one is told apart by the
-/// accent border and its lit title, not by a heavier line, which is what
-/// keeps the mosaic from jumping as focus moves.
+/// Rounded on every panel; focus shows as an accent border and lit title,
+/// not a heavier line, so the mosaic doesn't jump as focus moves.
 fn panel<'a>(title: String, focused: bool, tui: &Tui) -> Block<'a> {
     let (border, title_style) = if focused {
         (tui.theme.accent(), tui.theme.title())
@@ -91,7 +86,7 @@ fn panel<'a>(title: String, focused: bool, tui: &Tui) -> Block<'a> {
         ]))
 }
 
-/// The framed box the two bars share: same rounded border, same fill.
+/// The framed box the two bars share.
 fn bar_block<'a>(tui: &Tui) -> Block<'a> {
     Block::bordered()
         .border_type(BorderType::Rounded)
@@ -179,8 +174,7 @@ fn statusline_with(frame: &mut Frame, area: Rect, tui: &Tui, hint: &str) {
         separator(tui),
         Span::styled(format!(" {} ", tui.i18n.t(hint)), tui.theme.muted()),
     ]);
-    // The dot carries the severity, so the message itself stays readable
-    // rather than being painted red end to end.
+    // The dot carries the severity, so the message stays readable.
     let message = Line::from(vec![
         separator(tui),
         Span::styled(" ● ", if tui.is_error { tui.theme.error() } else { tui.theme.ok() }),
@@ -197,16 +191,16 @@ fn statusline_with(frame: &mut Frame, area: Rect, tui: &Tui, hint: &str) {
 }
 
 fn modules_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
-    // Two borders and the selection marker; what is left is the row.
+    // Two borders and the marker; what's left is the row.
     let inner = area.width.saturating_sub(3) as usize;
     let items: Vec<ListItem> = MODULES
         .iter()
         .map(|(label, mnemonic, target, glyph)| {
-            // The module whose screen is open keeps a lit glyph even when
-            // the cursor has moved on, so "where am I" survives browsing.
+            // The open screen keeps a lit glyph even when the cursor moves
+            // on, so "where am I" survives browsing.
             let current = *target == Some(tui.screen);
             let label = tui.i18n.t(label);
-            // Glyph, its space, the mnemonic and its trailing space.
+            // Glyph, space, mnemonic, trailing space.
             let gap = inner.saturating_sub(label.chars().count() + 4);
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{glyph} "), if current { tui.theme.accent() } else { tui.theme.muted() }),
@@ -281,8 +275,7 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
         .map(|(index, field)| {
             let editing = form.editing && index == form.idx;
             let cursor = if editing { "█" } else { "" };
-            // The marker is what tells a row you fill in from a row you
-            // choose from: "▾" means Enter unfolds a list.
+            // "▾" means Enter unfolds a list.
             let marker = if field.is_choice() { " ▾" } else { "" };
             let value = if field.is_choice() && field.value.is_empty() {
                 tui.i18n.t("picker_none").to_string()
@@ -308,9 +301,7 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     let list = List::new(items).highlight_style(tui.theme.selected());
     frame.render_stateful_widget(list, list_area, &mut ListState::default().with_selected(Some(form.idx)));
 
-    // A short closed set is worth spelling out under the form; a long one
-    // (12 textures, 66 crops) only says how many there are and how to see
-    // them.
+    // A short set is spelled out; a long one only says how many.
     let hint = match form.fields.get(form.idx) {
         Some(field) if field.is_choice() && field.options.len() <= 5 => {
             field.options.iter().map(String::as_str).collect::<Vec<_>>().join(" · ")
@@ -324,9 +315,7 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     );
 }
 
-/// The wordmark, borrowed from the "Cuarzo" direction the prototype
-/// explicitly keeps as Estrato's welcome screen. Shown only where it fits
-/// whole — a clipped wordmark is worse than none.
+/// Shown only where it fits whole — clipped is worse than absent.
 fn wordmark(frame: &mut Frame, area: Rect, tui: &Tui) {
     let mut lines: Vec<Line> = WORDMARK.iter().map(|art| Line::styled(*art, tui.theme.title())).collect();
     lines.push(Line::raw(""));
@@ -334,9 +323,8 @@ fn wordmark(frame: &mut Frame, area: Rect, tui: &Tui) {
     frame.render_widget(Paragraph::new(lines).centered(), area);
 }
 
-/// The line under the wordmark. Wider than the art itself, which is why
-/// [`banner_width`] and not `WORDMARK_WIDTH` is what decides whether the
-/// banner fits.
+/// Wider than the art itself, which is why [`banner_width`] and not
+/// `WORDMARK_WIDTH` decides whether the banner fits.
 fn subtitle(tui: &Tui) -> String {
     let mut line = format!("{} · v{}", tui.i18n.t("app_subtitle").to_uppercase(), env!("CARGO_PKG_VERSION"));
     if let Some(user) = current_user() {
@@ -345,10 +333,8 @@ fn subtitle(tui: &Tui) -> String {
     line
 }
 
-/// Whoever is running this. `USER` is what a login shell sets and `LOGNAME`
-/// is the POSIX spelling some environments set instead; a session with
-/// neither (a bare service manager, a container) simply loses the segment
-/// rather than greeting an empty name.
+/// `USER` is what a login shell sets, `LOGNAME` the POSIX spelling some
+/// environments set instead. Neither: the segment is dropped.
 fn current_user() -> Option<String> {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
@@ -368,8 +354,8 @@ fn dashboard(frame: &mut Frame, area: Rect, tui: &Tui) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // The banner gives way to the lot table the moment the table would be
-    // squeezed: header plus four rows is the floor worth keeping.
+    // The banner yields to the table as soon as the table would be
+    // squeezed: header plus four rows is the floor.
     let banner = if inner.width >= banner_width(tui) && inner.height >= WORDMARK_HEIGHT + 5 {
         WORDMARK_HEIGHT
     } else {
@@ -457,8 +443,7 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
     frame.render_stateful_widget(table, table_area, &mut TableState::default().with_selected(Some(tui.crop_idx)));
 }
 
-/// The yield-goal field under the crop filter. Empty until a crop is
-/// picked, because a yield goal only means anything next to a crop.
+/// Empty until a crop is picked: a goal only means something next to one.
 fn yield_line<'a>(tui: &Tui) -> Line<'a> {
     let Some(crop_id) = &tui.crop_override else {
         return Line::raw("");
@@ -534,9 +519,8 @@ fn plan(frame: &mut Frame, area: Rect, tui: &Tui) {
 }
 
 /// Which regime produced the N numbers above. The mineralization factor
-/// alone moves N availability by up to 3x between the climate-adjusted and
-/// the baseline value, so the plan must never leave the reader guessing —
-/// same rule the CLI output follows.
+/// alone moves N availability by up to 3x, so the reader must never have
+/// to guess — the rule the CLI output follows too.
 fn climate_line<'a>(tui: &Tui, plan: &crate::core::domain::FertilityPlan) -> Line<'a> {
     let label = match plan.climate.as_ref().and_then(|climate| climate.mean_temp_c) {
         Some(temp) => format!("{} ({} {temp:.1} °C)", tui.i18n.t("plan_climate_adjusted"), tui.i18n.t("plan_mean_temp")),
@@ -576,8 +560,8 @@ fn inspect(frame: &mut Frame, area: Rect, tui: &Tui) {
         Line::styled(tui.i18n.t("inspect_soil_tests").to_string(), tui.theme.title()),
     ];
     for test in &inspection.soil_tests {
-        // `to_string()` first: the domain's Display impls write straight to
-        // the formatter, so a bare `{:<4}` on them would not pad.
+        // `to_string()` first: the Display impls write straight to the
+        // formatter, so a bare `{:<4}` would not pad.
         lines.push(Line::raw(format!(
             "  {:<4} {:>9}  {:<14} {}",
             test.nutrient.to_string(),
@@ -636,9 +620,8 @@ fn inspect(frame: &mut Frame, area: Rect, tui: &Tui) {
         }
     }
 
-    // Known gap: reference data exists for these, no use case consumes it.
-    // One row for all six — six copies of the same sentence was six rows of
-    // a scrolling page saying one thing.
+    // Known gap: reference data exists, no use case consumes it. One row
+    // for all six rather than six copies of one sentence.
     lines.push(Line::raw(""));
     lines.push(Line::styled(tui.i18n.t("inspect_micronutrients").to_string(), tui.theme.title()));
     lines.push(Line::from(vec![
@@ -689,9 +672,8 @@ fn settings(frame: &mut Frame, area: Rect, tui: &Tui) {
     frame.render_stateful_widget(list, area, &mut ListState::default().with_selected(Some(tui.setting_idx)));
 }
 
-/// The unfolded option list for the selected form field. Sized to its
-/// contents up to half the screen, so a 4-option list isn't a huge empty
-/// box and the 66-crop list scrolls instead of overflowing.
+/// Sized to its contents up to half the screen, so a short list isn't a
+/// huge empty box and a long one scrolls instead of overflowing.
 fn picker_overlay(frame: &mut Frame, tui: &Tui) {
     let Some(picker) = &tui.picker else { return };
     let label = tui
@@ -776,16 +758,15 @@ fn screen_title(tui: &Tui) -> &str {
     })
 }
 
-/// Column headings, the prototype's `table.t th`. Uppercase is what sets
-/// them apart from the data — they used to be dimmed as well, which on a
-/// terminal with a wallpaper simply deleted them.
+/// Uppercase, not dimmed: dimming them deletes them on a terminal with a
+/// wallpaper.
 fn header<'a>(tui: &Tui, ids: &[&str]) -> Row<'a> {
     Row::new(ids.iter().map(|id| Cell::from(tui.i18n.t(id).to_uppercase())).collect::<Vec<_>>())
         .style(tui.theme.muted())
         .bottom_margin(1)
 }
 
-/// `label   value` — the value is the one carrying the emphasis.
+/// `label   value`, emphasis on the value.
 fn field<'a>(tui: &Tui, id: &str, value: String) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{:<18}", tui.i18n.t(id)), tui.theme.muted()),
@@ -826,9 +807,7 @@ fn toggle(tui: &Tui, options: &[String], active: &str, width: usize) -> Vec<Span
         .collect()
 }
 
-/// Filled in the accent, the remainder in the border colour — the prototype's
-/// `████░░░░` reads as one bar only when the two halves differ in weight,
-/// not just in glyph.
+/// The two halves differ in weight, not just in glyph.
 fn bar<'a>(tui: &Tui, value: f64, total: f64, width: usize) -> Line<'a> {
     let filled = if total > 0.0 {
         ((value / total) * width as f64).round().clamp(0.0, width as f64) as usize
@@ -899,8 +878,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    /// Flattened buffer text; cells are row-major, so anything that fits on
-    /// one line stays contiguous.
+    /// Row-major, so anything fitting on one line stays contiguous.
     fn render(tui: &Tui, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
         terminal.draw(|frame| draw(frame, tui)).expect("draw");
@@ -947,8 +925,7 @@ mod tests {
         assert!(render(&tui, 80, 24).contains("KEYBINDINGS"), "the help overlay must fit an 80x24 terminal");
     }
 
-    /// The banner is the one piece of chrome allowed to disappear, and it
-    /// has to disappear whole — a half-drawn wordmark is worse than none.
+    /// The banner may disappear, but only whole.
     #[test]
     fn the_wordmark_shows_when_it_fits_and_is_dropped_when_it_does_not() {
         let tui = Tui::new(bootstrap::build_app(), theme::default(), None);
@@ -957,8 +934,8 @@ mod tests {
         assert!(!render(&tui, 130, 14).contains(WORDMARK[0]), "too short: the lot table wins the space");
     }
 
-    /// The longest list the form can unfold is the 66-crop catalog; it has
-    /// to scroll inside the overlay rather than run off an 80x24 terminal.
+    /// The longest list must scroll inside the overlay rather than run off
+    /// an 80x24 terminal.
     #[test]
     fn the_unfolded_option_list_renders_over_the_form() {
         let mut tui = Tui::new(bootstrap::build_app(), theme::default(), None);
@@ -976,10 +953,9 @@ mod tests {
             tui.picker = None;
         }
 
-        // The list must actually paint its entries, not just an empty
-        // frame. Texture is the case that proves it: with 12 options the
-        // hint line under the form only shows a count, so a texture name
-        // on screen can only have come from the overlay.
+        // Texture proves the entries are painted, not just the frame: with
+        // 12 options the hint line shows only a count, so a texture name on
+        // screen can only have come from the overlay.
         let form = tui.form.as_mut().expect("form");
         form.idx = form.fields.iter().position(|field| field.label == "form_texture").expect("field");
         tui.activate_form_row();
@@ -989,8 +965,7 @@ mod tests {
     #[test]
     fn bar_is_proportional_and_never_overflows() {
         let tui = Tui::new(bootstrap::build_app(), theme::default(), None);
-        // The two halves carry different styles, so the assertion is on the
-        // glyphs the line ends up painting.
+        // Different styles per half, so assert on the painted glyphs.
         let glyphs = |value, total| {
             bar(&tui, value, total, 4).spans.iter().map(|span| span.content.to_string()).collect::<String>()
         };

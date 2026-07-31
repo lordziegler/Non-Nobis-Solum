@@ -1,14 +1,9 @@
-//! Reads `data/reference/<profile>/liming_rules.toml` — literature
-//! constants for the liming formulas (Al-toxicity factor, target base
-//! saturation). Same TOML-constants-in-memory style as
-//! `StaticConversionFactorsRepo`.
+//! Reads `data/reference/<profile>/liming_rules.toml` — Al-toxicity
+//! factor and target base saturation.
 //!
-//! A lot's `region` and the active `--profile` are independent knobs, and
-//! a file that lives inside a profile directory is already scoped to that
-//! profile. So a rule row may carry the sentinel region `"any"`, meaning
-//! "whatever region the lot claims, under this profile" — exact region
-//! first, sentinel second, the same shape `CsvCriticalLevelsRepo` and
-//! `YamlEfficiencyRulesRepo` use.
+//! A lot's `region` and the active `--profile` are independent knobs, so a
+//! row may carry the sentinel region `"any"`: exact region first, sentinel
+//! second, the shape `CsvCriticalLevelsRepo` also uses.
 
 use std::path::Path;
 
@@ -92,9 +87,8 @@ source = "test"
         assert_eq!(repo().al_factor("andina_colombia").unwrap(), 2.0);
     }
 
-    /// Used to be a hard failure — `LimingRulesRepository` propagates,
-    /// so `--profile global` on a lot whose region column says otherwise
-    /// killed the whole plan instead of the liming section.
+    /// `LimingRulesRepository` propagates, so without the fallback a lot
+    /// whose region the profile doesn't name kills the whole plan.
     #[test]
     fn an_unnamed_region_falls_back_to_the_sentinel() {
         assert_eq!(repo().al_factor("somewhere_else").unwrap(), 1.5);

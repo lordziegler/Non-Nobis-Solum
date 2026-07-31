@@ -1,22 +1,17 @@
-//! Registering a lot: the first use case in this project that writes.
-//!
-//! Everything arriving here is raw text typed by a person, so this module
-//! is the trust boundary. Nothing reaches [`CuratedDataWriter`] before it
-//! has been parsed into a domain type and range-checked, and a lot is
-//! never written twice under the same id.
+//! The trust boundary: everything arriving here is raw text typed by a
+//! person. Nothing reaches [`CuratedDataWriter`] before it is parsed into
+//! a domain type and range-checked, and no id is ever written twice.
 
 use std::str::FromStr;
 
 use crate::core::domain::{Depth, DomainError, FieldContext, IrrigationSystem, Nutrient, SoilTest, Texture, YieldTarget};
 use crate::core::ports::{CuratedDataWriter, FieldContextRepository, RegisterLotPort};
 
-/// A lot as typed by a user: every field is raw text, including the
-/// numbers, so that parsing and validation happen in exactly one place
-/// instead of once per front-end.
+/// Every field is raw text, including the numbers, so parsing and
+/// validation happen in one place instead of once per front-end.
 ///
-/// `latitude`/`longitude` are optional (empty means "not surveyed"); so
-/// are `crop_id`/`yield_value`, which write the lot's first planning row
-/// when both are given.
+/// Empty `latitude`/`longitude` mean "not surveyed"; `crop_id` and
+/// `yield_value` write the lot's first planning row when both are given.
 #[derive(Debug, Clone, Default)]
 pub struct LotRegistration {
     pub field_id: String,
@@ -60,16 +55,14 @@ impl RegisterLot {
 impl RegisterLotPort for RegisterLot {
     fn register_lot(&self, registration: &LotRegistration) -> Result<(), DomainError> {
         let field_id = required("field_id", &registration.field_id)?;
-        // A duplicate id would shadow the existing lot on every read (all
-        // curated readers stop at the first match), so it is refused before
-        // anything is written rather than "fixed" by overwriting.
+        // A duplicate id shadows the existing lot on every read, so it is
+        // refused before anything is written rather than overwritten.
         if self.field_context.get_context_by_field_id(&field_id).is_ok() {
             return Err(DomainError::InvalidInput(format!("lot {field_id} already exists")));
         }
 
         let context = FieldContext {
-            // One lot, one composite sample, one context row — the same
-            // identity the CLI's `--lot` already assumes.
+            // One lot, one composite sample — what `--lot` already assumes.
             sample_id: field_id.clone(),
             texture: Texture::from_str(&registration.texture)?,
             irrigation_system: IrrigationSystem::from_str(&registration.irrigation_system)?,
@@ -84,9 +77,8 @@ impl RegisterLotPort for RegisterLot {
             field_id,
         };
 
-        // The planning row is optional, but if half of it was typed the
-        // user meant to type the other half — silently dropping it would
-        // hide the mistake until the first plan fails.
+        // Optional, but half of it typed means the other half was meant:
+        // dropping it silently hides the mistake until the first plan.
         let target = match (registration.crop_id.trim(), registration.yield_value.trim()) {
             ("", "") => None,
             (crop_id, value) => Some((
@@ -107,8 +99,7 @@ impl RegisterLotPort for RegisterLot {
 
     fn add_soil_tests(&self, field_id: &str, entries: &[SoilTestEntry]) -> Result<(), DomainError> {
         let field_id = required("field_id", field_id)?;
-        // The mirror image of `register_lot`'s check: a sample is only
-        // meaningful attached to a lot that exists.
+        // A sample is only meaningful attached to a lot that exists.
         let context = self.field_context.get_context_by_field_id(&field_id)?;
         if entries.is_empty() {
             return Err(DomainError::InvalidInput("no soil test to save".to_string()));
@@ -127,8 +118,7 @@ impl RegisterLotPort for RegisterLot {
                 Ok(SoilTest {
                     sample_id: context.sample_id.clone(),
                     nutrient: Nutrient::from_str(&entry.nutrient_id)?,
-                    // A lab value of zero is a real reading ("below
-                    // detection"), unlike a bulk density of zero.
+                    // Zero is a real reading ("below detection").
                     value: bounded("value", &entry.value, 0.0, f64::MAX)?,
                     unit: required("unit", &entry.unit)?,
                     method: required("method", &entry.method)?,
@@ -195,8 +185,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    /// Knows about exactly one lot, and records nothing — the tests here
-    /// are about what gets rejected, and what shape reaches the writer.
+    /// Knows about exactly one lot and records nothing.
     struct OneLotRepo;
 
     impl FieldContextRepository for OneLotRepo {
@@ -266,8 +255,7 @@ mod tests {
         }
     }
 
-    /// So a test can keep looking at the spy after handing it to the use
-    /// case, which takes ownership of its writer.
+    /// So a test can still read the spy after the use case takes it.
     impl CuratedDataWriter for Rc<SpyWriter> {
         fn save_field_context(&self, context: &FieldContext) -> Result<(), DomainError> {
             (**self).save_field_context(context)

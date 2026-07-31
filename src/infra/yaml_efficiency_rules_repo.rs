@@ -1,15 +1,11 @@
 //! Reads `data/reference/<profile>/efficiency_rules.yaml` — nutrient use
-//! efficiency ranges by texture and irrigation system, from agronomic
-//! guidelines (e.g. MSU Nutrient Guidelines).
+//! efficiency ranges by texture and irrigation system.
 //!
-//! The curated grid only covers `{loam, clay_loam} x {rainfed, drip}`, 4
-//! of the domain's 48 texture x irrigation combinations, and the missing
-//! 44 need per-class field data nobody has transcribed yet. Rather than
-//! fabricate them, lookup falls back to the sentinel row
-//! `texture: "any", irrigation: "any"` — the same "exact match first,
-//! sentinel second" shape `CsvCriticalLevelsRepo` uses for texture. The
-//! sentinel rows are tagged in their `source` field as a fallback, not as
-//! literature; see the header comment of either `efficiency_rules.yaml`.
+//! The curated grid covers 4 of the domain's 48 texture x irrigation
+//! combinations; the other 44 need field data nobody has transcribed.
+//! Rather than fabricate them, lookup falls back to the sentinel row
+//! `texture: "any", irrigation: "any"`, tagged as a fallback rather than
+//! literature in its `source` field.
 
 use std::path::Path;
 
@@ -94,9 +90,8 @@ impl EfficiencyRulesRepository for YamlEfficiencyRulesRepo {
 mod tests {
     use super::*;
 
-    /// Two nutrients: `N` has an exact `loam`/`rainfed` row plus a
-    /// sentinel, `P` has only the sentinel. Literal input, so growing the
-    /// shipped reference files can never break this.
+    /// `N` has an exact `loam`/`rainfed` row plus a sentinel, `P` has only
+    /// the sentinel. Literal input, so the shipped files can't break this.
     const YAML: &str = r#"
 - texture: "loam"
   irrigation: "rainfed"

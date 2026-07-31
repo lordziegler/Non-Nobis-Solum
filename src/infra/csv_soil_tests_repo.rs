@@ -1,7 +1,5 @@
-//! Reads `data/curated/soil_tests.csv` — lab results for a specific
-//! sample, entered once per soil sample and reused across every planning
-//! run for that sample. Not reference data: this is what the user's lab
-//! actually measured.
+//! Reads `data/curated/soil_tests.csv` — what the user's lab measured,
+//! entered once per sample and reused by every planning run for it.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -51,14 +49,10 @@ impl SoilTestRepository for CsvSoilTestsRepo {
                 method: row.method_id,
                 layer: Depth { from_cm: row.depth_from_cm, to_cm: row.depth_to_cm },
             };
-            // This file is append-only: `CuratedDataWriter` never rewrites
-            // a row, so a corrected lab value arrives as a *second* row for
-            // the same nutrient at the same depth. The later row is the
-            // correction and wins — otherwise the correction would be
-            // written, accepted, and then silently ignored by every plan.
-            //
-            // Keyed on the depth as well as the nutrient: P at 0-20 and P
-            // at 20-40 are two different measurements, not a correction.
+            // Append-only file: a corrected lab value arrives as a second
+            // row, so the later one wins — otherwise the correction would be
+            // accepted and then silently ignored by every plan. Keyed on
+            // depth too: P at 0-20 and at 20-40 are different measurements.
             match tests.iter_mut().find(|t| t.nutrient == test.nutrient && t.layer == test.layer) {
                 Some(superseded) => *superseded = test,
                 None => tests.push(test),

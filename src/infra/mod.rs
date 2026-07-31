@@ -1,6 +1,5 @@
-//! Adapters: concrete implementations of `core::ports`, plus the
-//! composition root that wires them together. Everything that touches a
-//! file path, a CLI framework or a serialization format lives here.
+//! Implementations of `core::ports`, plus the composition root that wires
+//! them together. Everything touching a path, a CLI or a wire format.
 
 pub mod agroclimatic_adapter;
 pub mod bootstrap;
