@@ -12,6 +12,7 @@ use ratatui::Frame;
 use super::i18n::Language;
 use super::{Screen, Tui, MODULES, SETTINGS, UNPLANNED_MICRONUTRIENTS};
 use crate::core::application::LotSummary;
+use super::theme;
 use crate::core::domain::SoilStatus;
 
 /// Below this width the status column is dropped rather than squeezed —
@@ -649,6 +650,9 @@ fn inspect(frame: &mut Frame, area: Rect, tui: &Tui) {
 }
 
 fn settings(frame: &mut Frame, area: Rect, tui: &Tui) {
+    // Two borders plus the label column below, so a value set knows how
+    // much room it actually has.
+    let value_width = area.width.saturating_sub(29) as usize;
     let items: Vec<ListItem> = SETTINGS
         .iter()
         .map(|id| {
@@ -660,9 +664,13 @@ fn settings(frame: &mut Frame, area: Rect, tui: &Tui) {
                         Language::English => names[0].clone(),
                         Language::Spanish => names[1].clone(),
                     };
-                    toggle(tui, &names, &active)
+                    toggle(tui, &names, &active, value_width)
                 }
-                "settings_profile" => toggle(tui, &tui.profiles, &tui.cfg.profile),
+                "settings_theme" => {
+                    let names: Vec<String> = theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+                    toggle(tui, &names, tui.theme.name, value_width)
+                }
+                "settings_profile" => toggle(tui, &tui.profiles, &tui.cfg.profile, value_width),
                 "settings_data_root" => vec![Span::styled(tui.cfg.data_root.display().to_string(), tui.theme.muted())],
                 "settings_reference_dir" => {
                     vec![Span::styled(tui.cfg.reference_dir().display().to_string(), tui.theme.muted())]
@@ -789,11 +797,23 @@ fn empty<'a>(tui: &Tui, id: &str) -> Paragraph<'a> {
     Paragraph::new(Line::styled(format!(" {}", tui.i18n.t(id)), tui.theme.muted()))
 }
 
-/// The current value is a filled chip, the rest stay muted text. The `▸`
-/// carries the same information in glyph form because the row highlight
-/// patches over both colours — and the selected row is exactly the one
-/// whose active value has to stay readable.
-fn toggle(tui: &Tui, options: &[String], active: &str) -> Vec<Span<'static>> {
+/// The current value as a filled chip among the others, with `▸` carrying
+/// the same information in glyph form — the row highlight patches over
+/// both colours, and the selected row is exactly the one whose active
+/// value has to stay readable.
+///
+/// A set that does not fit collapses to the active value between cycle
+/// arrows. Themes and reference profiles are both open-ended lists, and a
+/// clipped one reads as a truncated word rather than as "there is more".
+fn toggle(tui: &Tui, options: &[String], active: &str, width: usize) -> Vec<Span<'static>> {
+    let spelled_out: usize = options.iter().map(|option| option.chars().count() + 2).sum();
+    if spelled_out > width {
+        return vec![
+            Span::styled("◂", tui.theme.muted()),
+            Span::styled(format!(" {active} "), tui.theme.badge(tui.theme.accent)),
+            Span::styled("▸", tui.theme.muted()),
+        ];
+    }
     options
         .iter()
         .map(|option| {
@@ -889,7 +909,7 @@ mod tests {
 
     #[test]
     fn every_screen_renders_at_both_densities() {
-        let mut tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        let mut tui = Tui::new(bootstrap::build_app(), theme::default(), None);
         tui.run_plan();
         assert!(tui.plan.is_some(), "LOT-001/corn/global should plan: {}", tui.message);
         tui.run_inspect();
@@ -931,7 +951,7 @@ mod tests {
     /// has to disappear whole — a half-drawn wordmark is worse than none.
     #[test]
     fn the_wordmark_shows_when_it_fits_and_is_dropped_when_it_does_not() {
-        let tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        let tui = Tui::new(bootstrap::build_app(), theme::default(), None);
         assert!(render(&tui, 130, 40).contains(WORDMARK[0]), "a roomy terminal must show the wordmark");
         assert!(!render(&tui, 60, 40).contains(WORDMARK[0]), "too narrow: drop it, don't clip it");
         assert!(!render(&tui, 130, 14).contains(WORDMARK[0]), "too short: the lot table wins the space");
@@ -941,7 +961,7 @@ mod tests {
     /// to scroll inside the overlay rather than run off an 80x24 terminal.
     #[test]
     fn the_unfolded_option_list_renders_over_the_form() {
-        let mut tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        let mut tui = Tui::new(bootstrap::build_app(), theme::default(), None);
         tui.open_form(Screen::NewLot);
 
         for label in ["form_irrigation", "form_crop"] {
@@ -968,7 +988,7 @@ mod tests {
 
     #[test]
     fn bar_is_proportional_and_never_overflows() {
-        let tui = Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None);
+        let tui = Tui::new(bootstrap::build_app(), theme::default(), None);
         // The two halves carry different styles, so the assertion is on the
         // glyphs the line ends up painting.
         let glyphs = |value, total| {

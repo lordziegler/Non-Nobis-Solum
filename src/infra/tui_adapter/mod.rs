@@ -88,8 +88,9 @@ const NEW_SAMPLE_FIELDS: [&str; 7] = [
     "form_depth_to",
 ];
 
-const SETTINGS: [&str; 5] = [
+const SETTINGS: [&str; 6] = [
     "settings_language",
+    "settings_theme",
     "settings_profile",
     "settings_data_root",
     "settings_reference_dir",
@@ -287,9 +288,7 @@ pub struct Tui {
 }
 
 pub fn run(cfg: Composition) -> Result<(), DomainError> {
-    // Queried before `ratatui::init()` takes the tty into raw mode and the
-    // alternate screen — the OSC handshake needs the plain terminal.
-    let theme = theme::detect();
+    let theme = theme::default();
     let mut tui = Tui::new(cfg, theme, bootstrap::build_climate_cache());
 
     let mut terminal = ratatui::init();
@@ -880,6 +879,10 @@ impl Tui {
                 self.i18n = I18n::new(self.i18n.language().toggled());
                 self.info("msg_language_changed");
             }
+            "settings_theme" => {
+                self.theme = theme::step(self.theme, delta);
+                self.info("msg_theme_changed");
+            }
             "settings_profile" if !self.profiles.is_empty() => {
                 let current = self.profiles.iter().position(|p| *p == self.cfg.profile).unwrap_or(0);
                 let len = self.profiles.len();
@@ -933,7 +936,7 @@ mod tests {
     /// Always offline: `None` for the climate cache means the tests never
     /// open a socket and never wait on one.
     fn tui() -> Tui {
-        Tui::new(bootstrap::build_app(), &theme::DARK_THEME, None)
+        Tui::new(bootstrap::build_app(), theme::default(), None)
     }
 
     fn press(tui: &mut Tui, code: KeyCode) {
@@ -956,7 +959,7 @@ mod tests {
 
         fn tui(&self) -> Tui {
             let cfg = Composition { data_root: self.root.join("data"), profile: "global".to_string() };
-            Tui::new(cfg, &theme::DARK_THEME, None)
+            Tui::new(cfg, theme::default(), None)
         }
     }
 

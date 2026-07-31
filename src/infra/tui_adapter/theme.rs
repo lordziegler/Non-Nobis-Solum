@@ -1,54 +1,96 @@
-//! Terminal-adaptive palette.
+//! Palettes, and the list the Settings screen cycles through.
 //!
-//! The "Estrato" direction lives in the *structure* — rounded tiles, framed
-//! bars, filled mode badges, the `▎` selection rule — not in a fixed set of
-//! hex values. So no colour here is absolute: backgrounds are
-//! [`Color::Reset`], which keeps whatever the terminal draws (including
-//! transparency and a background image), and every semantic role is an ANSI
-//! slot the user's own colour scheme defines.
+//! Two kinds of theme live here and the difference matters more than the
+//! colours do:
 //!
-//! The role map reads copper as amber (yellow slot) and sage-teal as cyan,
-//! which is as close as sixteen slots get to the prototype.
+//! - A theme that **owns its background** names every colour, including the
+//!   one behind the text. It reproduces a design exactly and paints over
+//!   whatever the terminal was showing — including a configured
+//!   transparency or wallpaper.
+//! - A theme that **does not** leaves `bg`, `panel` and `fg` as
+//!   [`Color::Reset`] and takes its accents from ANSI slots, so the user's
+//!   own terminal colour scheme drives it end to end.
 //!
-//! One rule holds the whole thing together: **only [`Theme::border`] may be
-//! faint, and only structure may use it.** Text ranks by hue and emphasis
-//! (label vs value, bold, accent, reverse), never by fading, because this
-//! palette does not know what it is being drawn on top of.
+//! [`Theme::owns_background`] is what every style decision branches on: a
+//! palette that does not know what is behind the text cannot name a
+//! highlight background, so it reverses instead.
+//!
+//! One rule holds across all of them: **only [`Theme::border`] may be
+//! faint, and only structure may use it.** Text ranks by hue and emphasis,
+//! never by fading.
 
 use ratatui::style::{Color, Modifier, Style};
-use terminal_colorsaurus::{theme_mode, QueryOptions, ThemeMode};
 
 pub struct Theme {
-    /// Painted over the whole frame before anything else. `Reset` on both
-    /// bundles: the gaps between tiles show the terminal, on purpose.
+    /// Shown in Settings. Proper names, so they are not translated.
+    pub name: &'static str,
+    /// Painted over the whole frame before anything else.
     pub bg: Color,
-    /// Inside a panel. Also `Reset` — a terminal-driven palette has no
-    /// second background to lift a tile with, and inventing one is what
-    /// would paint over a configured transparency.
+    /// Inside a panel — one step off `bg`, which is what separates the
+    /// tiles without needing a heavier border.
     pub panel: Color,
     /// **Structure only**: borders, separators, the unfilled half of a bar.
-    /// Never a character a reader has to make out. Slot 8 is the one slot
-    /// whose contrast against the background is anybody's guess — a
-    /// terminal with a wallpaper can swallow it whole — so nothing that
-    /// carries meaning is allowed to depend on it.
+    /// Never a character a reader has to make out.
     pub border: Color,
     pub fg: Color,
     /// Everything that *introduces* a value rather than being one: field
     /// labels, column headings, key hints, mnemonics, paths, provenance.
-    /// A colour rather than the body foreground, because a screen where
-    /// label and value look identical reads as one grey block — and a
-    /// colour rather than a dimmer grey, because faint is what made them
-    /// unreadable in the first place.
     pub label: Color,
     /// Focus and nothing else — never decoration.
     pub accent: Color,
     pub ok: Color,
     pub warn: Color,
     pub error: Color,
+    pub sel_bg: Color,
+    pub sel_fg: Color,
 }
 
-/// Bright ANSI slots: on a dark background the normal ones are too dim.
-pub const DARK_THEME: Theme = Theme {
+/// The Imperator palette — `Imperator-dotfiles/assets/Imperator-palette.md`,
+/// the same amber-on-obsidian identity as the compositor, the bar and the
+/// editor. Role names below are that document's own.
+pub const IMPERATOR: Theme = Theme {
+    name: "Imperator",
+    bg: Color::Rgb(0x0E, 0x0C, 0x08),     // Deep Void
+    panel: Color::Rgb(0x14, 0x10, 0x08),  // Dark Ember
+    // The palette's Ember Border (#2A2010) disappears against Dark Ember at
+    // this size, so this is its Hyprland inactive-border instead — the same
+    // role, one step up in luminance.
+    border: Color::Rgb(0x3A, 0x30, 0x18),
+    fg: Color::Rgb(0xD4, 0xA8, 0x43),     // Amber Light
+    label: Color::Rgb(0xB8, 0x86, 0x0B),  // Old Gold — secondary text
+    accent: Color::Rgb(0xFF, 0xD7, 0x00), // Golden Signal
+    ok: Color::Rgb(0x8D, 0xB8, 0x7A),     // Radar Green
+    warn: Color::Rgb(0xC8, 0x96, 0x0C),   // Caution Amber
+    error: Color::Rgb(0xFF, 0x6B, 0x2B),  // Plasma Red
+    // Amber Dust, the palette's hover step, rather than its active step: a
+    // selected row of text needs more separation than a window chrome does.
+    sel_bg: Color::Rgb(0x24, 0x1C, 0x0C),
+    sel_fg: Color::Rgb(0xFF, 0xD7, 0x00),
+};
+
+/// "Estrato" (1b) from `docs/Prototypes/` — the direction this TUI's layout
+/// came from. Cold graphite against the copper focus; the deliberate
+/// opposite of Imperator's warmth.
+pub const ESTRATO: Theme = Theme {
+    name: "Estrato",
+    bg: Color::Rgb(0x0E, 0x12, 0x14),
+    panel: Color::Rgb(0x13, 0x1A, 0x1D),
+    border: Color::Rgb(0x26, 0x34, 0x3A),
+    fg: Color::Rgb(0xCD, 0xD8, 0xD6),
+    label: Color::Rgb(0x7F, 0x9A, 0xA8),
+    accent: Color::Rgb(0xC8, 0x79, 0x4A),
+    ok: Color::Rgb(0x5F, 0xA3, 0x92),
+    warn: Color::Rgb(0xD0, 0xA2, 0x4A),
+    error: Color::Rgb(0xD4, 0x67, 0x4F),
+    sel_bg: Color::Rgb(0x1C, 0x2D, 0x32),
+    sel_fg: Color::Rgb(0xEA, 0xF4, 0xF0),
+};
+
+/// No colours of its own: ANSI slots and `Reset`, so a configured
+/// transparency, wallpaper or colour scheme comes through untouched. Bright
+/// slots — on a dark background the normal ones are too dim.
+pub const TERMINAL_DARK: Theme = Theme {
+    name: "Terminal dark",
     bg: Color::Reset,
     panel: Color::Reset,
     border: Color::Indexed(8),
@@ -60,10 +102,14 @@ pub const DARK_THEME: Theme = Theme {
     // accent instead of competing with it.
     warn: Color::Indexed(3),
     error: Color::Indexed(9),
+    sel_bg: Color::Reset,
+    sel_fg: Color::Reset,
 };
 
-/// Normal ANSI slots: on a light background the bright ones wash out.
-pub const LIGHT_THEME: Theme = Theme {
+/// The same, on normal slots: the bright ones wash out on a light
+/// background.
+pub const TERMINAL_LIGHT: Theme = Theme {
+    name: "Terminal light",
     bg: Color::Reset,
     panel: Color::Reset,
     border: Color::Indexed(8),
@@ -73,21 +119,33 @@ pub const LIGHT_THEME: Theme = Theme {
     ok: Color::Indexed(6),
     warn: Color::Indexed(3),
     error: Color::Indexed(1),
+    sel_bg: Color::Reset,
+    sel_fg: Color::Reset,
 };
 
-/// Asks the terminal for its background (OSC 11) and picks the bundle by
-/// perceived lightness. Must run *before* the alternate screen is entered,
-/// while the query/response handshake still owns the tty. Terminals that
-/// don't answer fall back to the dark bundle.
-pub fn detect() -> &'static Theme {
-    match theme_mode(QueryOptions::default()) {
-        Ok(ThemeMode::Light) => &LIGHT_THEME,
-        _ => &DARK_THEME,
-    }
+/// What Settings cycles through. First entry is the default.
+pub const THEMES: [&Theme; 4] = [&IMPERATOR, &ESTRATO, &TERMINAL_DARK, &TERMINAL_LIGHT];
+
+pub fn default() -> &'static Theme {
+    THEMES[0]
+}
+
+/// The theme after `current`, wrapping. Matching on the name keeps this
+/// independent of how the constants are laid out in memory.
+pub fn step(current: &Theme, delta: isize) -> &'static Theme {
+    let index = THEMES.iter().position(|theme| theme.name == current.name).unwrap_or(0);
+    let len = THEMES.len();
+    THEMES[(index + if delta < 0 { len - 1 } else { 1 }) % len]
 }
 
 impl Theme {
-    /// Body text inside a panel: whatever the terminal already draws.
+    /// Whether this palette names the colour behind the text. `false` means
+    /// the terminal owns it, and nothing here may assume what it is.
+    pub fn owns_background(&self) -> bool {
+        self.bg != Color::Reset
+    }
+
+    /// Body text inside a panel.
     pub fn base(&self) -> Style {
         Style::default().fg(self.fg).bg(self.panel)
     }
@@ -100,9 +158,9 @@ impl Theme {
         Style::default().fg(self.accent).add_modifier(Modifier::BOLD)
     }
 
-    /// Secondary text: labels, hints, column headings, provenance. Ranked
-    /// below the value it introduces by *hue*, never by fading — a faded
-    /// glyph on an unknown background is a glyph nobody can read.
+    /// Secondary text. Ranked below the value it introduces by *hue*, never
+    /// by fading — a faded glyph on an unknown background is a glyph nobody
+    /// can read.
     pub fn muted(&self) -> Style {
         Style::default().fg(self.label)
     }
@@ -124,17 +182,60 @@ impl Theme {
         Style::default().fg(self.warn)
     }
 
-    /// Selected row. Reverse video rather than a named background: it is
-    /// the one highlight guaranteed to be legible against a background this
-    /// palette deliberately does not know.
+    /// Selected row: a lifted background where the palette owns one, which
+    /// leaves the row's per-cell colours intact. Reverse video otherwise —
+    /// the one highlight legible against a background this theme has
+    /// deliberately not named.
     pub fn selected(&self) -> Style {
-        Style::default().fg(self.accent).add_modifier(Modifier::REVERSED)
+        if self.owns_background() {
+            Style::default().fg(self.sel_fg).bg(self.sel_bg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(self.accent).add_modifier(Modifier::REVERSED)
+        }
     }
 
     /// The filled block that opens the context bar and the statusline.
-    /// Reversing puts the role colour behind the terminal's own background
-    /// colour, so the label stays readable in any scheme.
     pub fn badge(&self, role: Color) -> Style {
-        Style::default().fg(role).add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        if self.owns_background() {
+            Style::default().fg(self.bg).bg(role).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(role).add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rule the whole module exists to enforce: a palette that has not
+    /// named its background must not name a highlight background either,
+    /// and one that has must not fall back to reverse video.
+    #[test]
+    fn a_highlight_names_a_background_only_when_the_theme_owns_one() {
+        for theme in THEMES {
+            let selected = theme.selected();
+            let badge = theme.badge(theme.accent);
+            if theme.owns_background() {
+                assert!(selected.bg.is_some() && badge.bg.is_some(), "{} must lift, not reverse", theme.name);
+            } else {
+                assert!(selected.bg.is_none() && badge.bg.is_none(), "{} must not name a background", theme.name);
+                assert!(
+                    selected.add_modifier.contains(Modifier::REVERSED),
+                    "{} needs reverse video to stay legible",
+                    theme.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cycling_visits_every_theme_and_wraps_both_ways() {
+        let mut theme = default();
+        for _ in 0..THEMES.len() {
+            theme = step(theme, 1);
+        }
+        assert_eq!(theme.name, default().name, "a full cycle must come back to the start");
+        assert_eq!(step(default(), -1).name, THEMES[THEMES.len() - 1].name, "back from the first wraps to the last");
     }
 }

@@ -64,7 +64,7 @@ The visual direction is **Estrato (1b)** from
 | Crop catalog | `ListCropsPort::list_crops` | `/` filters over id, name, type and family; `Enter` picks a crop, overriding the lot's curated one |
 | Fertility plan | `FertilityCalculatorPort::calculate` | per nutrient: demand, soil supply, efficiency, to-apply, balance bar, soil status, product and dose |
 | Inspect | `InspectScenario::inspect` | field context, soil tests, per-nutrient provenance, then the muted micronutrient row |
-| Settings | — | language toggle, reference profile, and the three data paths (read-only) |
+| Settings | — | language, theme, reference profile, and the three data paths (read-only) |
 
 ## Keys
 
@@ -84,11 +84,11 @@ The visual direction is **Estrato (1b)** from
 
 | File | Lines | What it owns |
 |---|---|---|
-| `src/infra/tui_adapter/mod.rs` | 1312 | `Tui` state, the event loop, every use-case call |
-| `src/infra/tui_adapter/ui.rs` | 985 | all rendering; the only file that formats numbers |
+| `src/infra/tui_adapter/mod.rs` | 1315 | `Tui` state, the event loop, every use-case call |
+| `src/infra/tui_adapter/ui.rs` | 1005 | all rendering; the only file that formats numbers |
 | `src/infra/tui_adapter/i18n.rs` | 77 | bundle loading and `t()` |
-| `src/infra/tui_adapter/theme.rs` | 133 | terminal query and the two palettes |
-| `lang/{en,es}.toml` | 123 each | the string bundles |
+| `src/infra/tui_adapter/theme.rs` | 241 | the four palettes and the cycle |
+| `lang/{en,es}.toml` | 176 each | the string bundles |
 | `src/tui_main.rs` | 8 | `tui_adapter::run(bootstrap::build_app())` |
 
 `ui.rs` is a child module of `tui_adapter`, so it reads `Tui`'s private
@@ -128,46 +128,55 @@ the long form.
 
 ### Theme
 
-`terminal_colorsaurus::theme_mode()` runs **before** `ratatui::init()` — the
-OSC 11 handshake needs the plain tty, not raw mode + alternate screen. Dark
-or light picks between two palettes; a terminal that doesn't answer falls
-back to the dark bundle.
+Four palettes, cycled from the Settings screen. **Imperator is the
+default** — the amber-on-obsidian identity from
+`Imperator-dotfiles/assets/Imperator-palette.md`, the same one the
+compositor, the bar and the editor use. Roles below carry that document's
+own names.
 
-**No hex colour exists anywhere in the TUI.** Backgrounds are
-`Color::Reset`, so a configured transparency or background image survives
-untouched, and every semantic role is an ANSI slot the user's own colour
-scheme defines:
+| Theme | Character | Background |
+|---|---|---|
+| **Imperator** (default) | warm amber / obsidian | its own |
+| Estrato | cold graphite / copper — the layout's own prototype | its own |
+| Terminal dark | ANSI bright slots | the terminal's |
+| Terminal light | ANSI normal slots | the terminal's |
 
-| Role | Estrato | Dark bundle | Light bundle |
-|---|---|---|---|
-| `accent` (focus) | copper | 11 bright yellow | 3 yellow |
-| `ok` | sage-teal | 14 bright cyan | 6 cyan |
-| `warn` | amber | 3 yellow | 3 yellow |
-| `error` | coral | 9 bright red | 1 red |
-| `border` | slate | 8 | 8 |
-| `fg` / `bg` / `panel` | graphite | Reset | Reset |
+`Theme::owns_background` is the distinction every style decision branches
+on, and it is the only branch in the module:
 
-`warn` sits one slot below `accent` on the dark bundle so "medium" soil
-status does not compete with focus.
+- **Owns it** (Imperator, Estrato) — every colour is named, including the
+  one behind the text, so the design reproduces exactly. It also paints
+  over a configured transparency or wallpaper.
+- **Does not** (Terminal *) — `bg`, `panel` and `fg` stay `Color::Reset`
+  and the accents are ANSI slots, so the user's own colour scheme drives
+  it end to end. Such a palette **may not name a highlight background**,
+  because it does not know what is behind the text: `selected()` and
+  `badge()` reverse instead. The cost is that a reversed row flattens its
+  per-cell colours, which is why the two RGB themes lift a background and
+  keep them.
+
+`a_highlight_names_a_background_only_when_the_theme_owns_one` fails the
+build if a new palette gets that backwards.
 
 **Only `border` may be faint, and only structure may use it** — borders,
-separators, the unfilled half of a bar. Slot 8 is the one slot whose
-contrast against the background is anybody's guess, and a terminal with a
-wallpaper swallows it whole; a `theme.dim` role for secondary *text* is
-exactly how panel titles, column headings and the status-column labels once
-became unreadable. Text ranks by emphasis instead: `muted()` is the
-terminal's own foreground, `strong()` adds bold, `accent()`/`selected()` go
-above that. Nothing fades.
+separators, the unfilled half of a bar. A `dim` role for secondary *text*
+is exactly how panel titles, column headings and every label in the status
+column once became unreadable on a terminal with a wallpaper. Text ranks by
+hue and emphasis instead: `muted()` is the `label` colour for whatever
+introduces a value, `strong()` is bold for the value itself, and
+`accent()`/`title()`/`selected()` rank above both. Nothing fades.
 
-Two consequences worth knowing before changing anything here:
+The choice is **session-only**, like the language toggle: there is no
+config file anywhere in this project, and adding one for a theme would be
+the first. The default is the one that matters, and it is Imperator.
 
-- **The direction lives in the structure, not the palette** — rounded tiles,
-  framed bars, filled badges, the `▎` rule, the wordmark. A terminal-driven
-  palette cannot reproduce copper, and that is the accepted trade.
-- **A highlight may not name a background**, because this palette does not
-  know what the background is. `selected()` and `badge()` both use
-  `Modifier::REVERSED`, the one highlight legible in any scheme. The cost is
-  that a reversed row flattens its per-cell colours.
+Adding a palette is a `Theme` constant plus an entry in `THEMES` — no
+other file changes, and the name is a proper noun so it is not translated.
+
+Dropping the old auto-detection took `terminal-colorsaurus` out of
+`Cargo.toml`. Worth knowing because it also removed a constraint the rest
+of this file used to carry: nothing has to run before `ratatui::init()`
+any more.
 
 ## Boundary notes and gaps
 
@@ -228,6 +237,8 @@ Tests specific to this adapter, all in-module:
   plus the help overlay through `TestBackend` at 80x24 and 130x40. This is
   what catches layout panics and clipped panels.
 - `ui::tests::the_wordmark_shows_when_it_fits_and_is_dropped_when_it_does_not`
+- `theme::tests::a_highlight_names_a_background_only_when_the_theme_owns_one`
+- `theme::tests::cycling_visits_every_theme_and_wraps_both_ways`
 - `tests::esc_leaves_a_screen_first_and_quits_only_from_the_dashboard`
 - `tests::filter_narrows_the_catalog_and_typing_never_moves_the_selection`
 - `tests::language_toggle_swaps_the_bundle_without_touching_the_data`
