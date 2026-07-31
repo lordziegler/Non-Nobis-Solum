@@ -2,6 +2,8 @@
 name = "non_nobis_solum"
 version = "0.1.0"
 edition = "2021"
+authors = ["Sebastian Ziegler"]
+license = "GPL-3.0-or-later"
 # Two binaries now; keep bare `cargo run` meaning the CLI, as before.
 default-run = "non_nobis_solum"
 description = "Fertilization plan engine driven by soil analysis, crop removal coefficients, efficiency rules and fertilizer sources."
