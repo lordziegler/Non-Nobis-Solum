@@ -46,6 +46,19 @@ impl YamlEfficiencyRulesRepo {
 
     fn from_yaml_str(text: &str) -> Result<Self, DomainError> {
         let rules: Vec<EfficiencyRuleRow> = serde_yaml::from_str(text).map_err(|e| DomainError::DataSource(e.to_string()))?;
+        // `net_requirement_kg_ha` divides by the efficiency, so a zero (or
+        // inverted, or out-of-range) row would turn into an infinite dose
+        // several layers away from the file that caused it. Refused here,
+        // where the offending row can still be named.
+        if let Some(bad) = rules
+            .iter()
+            .find(|r| !(r.efficiency_min > 0.0 && r.efficiency_min <= r.efficiency_max && r.efficiency_max <= 1.0))
+        {
+            return Err(DomainError::DataSource(format!(
+                "efficiency range for texture={} irrigation={} nutrient={} must satisfy 0 < min <= max <= 1, got {}-{}",
+                bad.texture, bad.irrigation, bad.nutrient, bad.efficiency_min, bad.efficiency_max
+            )));
+        }
         Ok(Self { rules })
     }
 }
@@ -60,14 +73,14 @@ impl EfficiencyRulesRepository for YamlEfficiencyRulesRepo {
         let texture_str = texture.to_string();
         let irrigation_str = irrigation.to_string();
 
-        let exact = |r: &&EfficiencyRuleRow| r.texture == texture_str && r.irrigation == irrigation_str;
-        let sentinel = |r: &&EfficiencyRuleRow| r.texture == ANY && r.irrigation == ANY;
-        let matching = |accept: &dyn Fn(&&EfficiencyRuleRow) -> bool| {
-            self.rules.iter().find(|r| r.nutrient == nutrient_id && accept(r))
+        let row = |texture: &str, irrigation: &str| {
+            self.rules
+                .iter()
+                .find(|r| r.nutrient == nutrient_id && r.texture == texture && r.irrigation == irrigation)
         };
 
-        matching(&exact)
-            .or_else(|| matching(&sentinel))
+        row(&texture_str, &irrigation_str)
+            .or_else(|| row(ANY, ANY))
             .map(|r| (r.efficiency_min, r.efficiency_max))
             .ok_or_else(|| {
                 DomainError::NotFound(format!(
@@ -143,6 +156,33 @@ mod tests {
                 .expect("sentinel row"),
             (0.35, 0.55)
         );
+    }
+
+    /// A zero efficiency divides into an infinite dose in
+    /// `net_requirement_kg_ha`, so the file is refused rather than planned on.
+    #[test]
+    fn an_unusable_efficiency_range_is_refused_at_load() {
+        let broken = YAML.replace("efficiency_min: 0.35", "efficiency_min: 0.0");
+        assert!(matches!(
+            YamlEfficiencyRulesRepo::from_yaml_str(&broken),
+            Err(DomainError::DataSource(_))
+        ));
+
+        let inverted = YAML.replace("efficiency_max: 0.55", "efficiency_max: 0.10");
+        assert!(matches!(
+            YamlEfficiencyRulesRepo::from_yaml_str(&inverted),
+            Err(DomainError::DataSource(_))
+        ));
+    }
+
+    /// Every shipped profile must actually load — the check above is
+    /// worthless if the reference data itself trips it.
+    #[test]
+    fn every_shipped_profile_passes_the_check() {
+        for profile in ["global", "andina_colombia"] {
+            let path = format!("data/reference/{profile}/efficiency_rules.yaml");
+            assert!(YamlEfficiencyRulesRepo::from_yaml_file(&path).is_ok(), "{path} was refused");
+        }
     }
 
     #[test]
