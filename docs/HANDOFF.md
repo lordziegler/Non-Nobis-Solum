@@ -3,18 +3,20 @@
 A hexagonal (ports & adapters) Rust CLI at the repo root (`Cargo.toml`,
 `src/`, `data/`), package name `non_nobis_solum`, built on top of the
 `Non-Nobis-Solum-Py` prototype, with a second front-end (`nns-tui`).
-Eight sessions so far: (1) the initial Rust port, (2) Bertsch et al.'s
+Nine sessions so far: (1) the initial Rust port, (2) Bertsch et al.'s
 nutrient-removal/soil-standard tables, (3) a 500-product Colombian
 fertilizer vademecum, (4) N from organic matter, (5) the TUI, (6) liming,
 (7) the NASA POWER agroclimatic adapter, (8) the four blockers of
-`docs/BLOCKERS-AND-ROADMAP.md` — including the first write path.
+`docs/BLOCKERS-AND-ROADMAP.md` — including the first write path — and
+(9) an audit pass that deleted dead code and closed one division by zero.
 
 ## Status
 
 - `cargo build`: zero warnings (the old `dead_code` ones went away in
   session 5, when `core`/`infra` moved into a library).
-- `cargo test`: 69/69 as of session 8 (5/5 when this section was
-  written) — pure domain math in
+- `cargo clippy --all-targets`: zero warnings as of session 9.
+- `cargo test`: 81/81 as of session 9 (69/69 in session 8, 5/5 when this
+  section was written) — pure domain math in
   `src/core/domain/services.rs`, pinned against the prototype's formulas
   with literal inputs (not tied to any reference-data row, so data changes
   never break these).
@@ -543,6 +545,139 @@ plan including the lime recommendation, and soil status resolves under
 - The TUI was **not** launched by hand (it takes over the tty); its own
   test suite renders all seven screens at 80x24 and 130x40.
 
+## Session 9 — audit pass: one division by zero, dead code, clippy
+
+No feature work. A read-through of all ~6,800 lines of `src/` asking two
+questions per file: is this reachable, and is it right. The agronomy was
+left alone on purpose — the formulas, the `AGRONOMIC_NOTE` blocks, the
+clamps and the `ponytail:` calibration notes are the part where
+"simplifying" means losing precision, not noise.
+
+### The one correctness bug — an infinite fertilizer dose
+
+`services::net_requirement_kg_ha` divides by the efficiency fraction and
+had no guard against zero:
+
+```rust
+(demand_kg_ha - availability_kg_ha) / efficiency_fraction
+```
+
+Efficiency comes from `efficiency_rules.yaml`, i.e. from a file a human
+edits. A row with `efficiency_min: 0.0` / `efficiency_max: 0.0` makes that
+expression `inf`, `dose_kg_product_ha` then divides `inf` by the product
+grade, and the CLI prints `inf kg/ha Urea` as an agronomic
+recommendation — three layers away from the file that caused it, with no
+error anywhere. An inverted range (`min > max`) is the same class of
+garbage arriving quietly.
+
+Fixed at the trust boundary rather than in the formula:
+`YamlEfficiencyRulesRepo::from_yaml_str` now refuses to construct at all
+unless every row satisfies `0 < min <= max <= 1`, and the
+`DomainError::DataSource` message names the offending
+texture/irrigation/nutrient and its numbers. That is the single choke
+point both `CalculateFertilityPlan` and `InspectScenario` load through, so
+one check covers both; putting the guard inside the formula would instead
+have forced a decision (return 0? return `inf`?) that silently
+under-fertilizes or keeps printing nonsense.
+
+Two tests: `an_unusable_efficiency_range_is_refused_at_load` (zero and
+inverted) and `every_shipped_profile_passes_the_check`, which loads
+`global` and `andina_colombia` for real — a validation that rejected the
+project's own reference data would be worse than none.
+
+### Dead code removed
+
+None of this had a single caller. It survived because everything in a
+library crate is `pub`, so `dead_code` never fires on it — grep, not the
+compiler, is what finds this class of rot:
+
+- `SoilSample` and `NutrientDemand` (`entities.rs`); deleting
+  `NutrientDemand` in turn orphaned `DemandType`, and `Availability` was
+  never used either (`value_objects.rs`).
+- `CropCatalogRepository::get_crop` and
+  `FertilizerSourceRepository::get_source` — two **port methods**, each
+  with a full CSV implementation behind it. Worth noting for the
+  architecture: an unused method on a port is more expensive than an
+  unused function, because every future adapter has to implement it.
+- `NasaPowerRepo::with_base_url` and its `base_url` field. Its doc comment
+  claimed it was "used by the tests to serve a canned response"; no test
+  used it, and never had — the tests exercise `climatology_from` directly
+  on a literal payload. A comment asserting a fact that is not true is
+  worse than no comment, so both went.
+
+### Simplifications
+
+- `YamlEfficiencyRulesRepo::get_efficiency_range` used two closures and a
+  `&dyn Fn` indirection to express "exact row first, sentinel second". Now
+  one `row(texture, irrigation)` closure called twice.
+- `bootstrap::build_agroclimatic_repo` no longer wraps NASA POWER in
+  `CachedAgroclimaticRepo`. A CLI run fetches one climatology and exits, so
+  that cache was never read once — as `cache.rs`'s own doc comment already
+  said ("a single CLI run never hits it twice"). The TUI keeps its cache,
+  which is the front-end that actually needs one.
+- `csv_curated_writer`: dropped the `number()` wrapper (it was
+  `to_string()`) and the `NO_COORDINATES_NOTE = ""` constant; the reason
+  that column is written empty now sits as a comment where it is written.
+- `csv_field_context_repo`: two `impl CsvFieldContextRepo` blocks merged.
+- The five `cargo clippy` warnings (print literal, type complexity, two
+  `cloned_ref_to_slice_refs`, `expect_fun_call`) all fixed.
+
+### Faults found and left alone, with the reason
+
+These are recorded rather than fixed — each one is either a judgement
+call the next session should make, or a real gap that wanting a small
+diff should not be allowed to paper over:
+
+- **The division guard lives in the caller, not the function.**
+  `services::dose_kg_product_ha` and `lime_material_dose_t_ha` divide the
+  same way `net_requirement_kg_ha` did. Today they are safe *only* because
+  `highest_rated` filters ratings to `> 0.0` before either is reached. That
+  coupling is invisible from the functions themselves: a second call site
+  that skips `highest_rated` reintroduces the infinite dose. Either move
+  the guard in or say so in their doc comments.
+- **Three climate fields are written and never read.**
+  `AnnualClimatology::min_temp_c`, `humidity_pct` and `wind_ms` are filled
+  by the POWER adapter and consumed by no rule — ET0 is derived from the
+  raw monthly parameter map, not from these. They were kept because the
+  struct is a provider-shaped DTO and dropping them would narrow what a
+  future rule can reach for, but nothing today justifies them.
+- **`rue_index` is printed but scales nothing.** The CLI reports "Solar
+  yield potential: HIGH/MEDIUM/LOW" next to the plan. It is already marked
+  `TODO(gap)` in `services.rs`, but the risk is presentational and worth
+  restating: a figure printed beside a dose reads as an input to that dose.
+  It is not.
+- **`product: "grain"` is still hardcoded** in both front-ends
+  (`ponytail:`-flagged in `tui_adapter/mod.rs`, a clap default on the CLI).
+  Any crop whose removal rows are keyed to another harvested organ silently
+  fails to match.
+- **The inspect screen borrows `soil_status` from the plan.**
+  `ScenarioInspection` carries critical levels but never classifies
+  against them, so inspecting without planning first shows no status
+  (`TODO(gap)` in `ui.rs`).
+
+### Verified
+
+- `cargo clippy --all-targets` zero warnings; `cargo test` 81/81.
+- `plan --lot LOT-001 --crop corn --no-climate`, `inspect --lot LOT-001
+  --crop corn` and `crops` all produce the same output as before the pass;
+  `cargo build --bin nns-tui` builds.
+- Test count went 77 → 81 across the working tree: +2 from this pass
+  (the efficiency-range checks) and +2 from concurrent theme work, below.
+
+### Note for whoever picks this up
+
+This pass ran concurrently with the theme work that landed as
+`2db5b41 Feat: four palettes and a theme selector, Imperator by default`.
+For a while both sets of edits sat unstaged in the same checkout, which is
+why the +2 tests above are not from this session; the file sets are
+disjoint (`theme.rs`, `ui.rs`, `tui_adapter/mod.rs`, `lang/*.toml`,
+`Cargo.toml`) and the two passes were committed separately.
+
+An untracked `docs/Non-Nobis-Solum-Py/` also appeared during the session,
+apparently the archived Python prototype being relocated. It was left
+untracked and uncommitted on purpose — moving a prototype into `docs/` is
+its own decision, not part of an audit pass.
+
 ## Checklist — data still to gather / implement
 
 From session 7 (agroclimatic adapter):
@@ -691,6 +826,17 @@ From session 3 (fertilizer vademecum):
 - [ ] **`global`'s fertilizer catalog was left untouched (6 products)** —
       only `andina_colombia` got the vademecum. If `global` should also
       grow beyond its current generic minimal set, that's separate work.
+
+From session 9 (audit pass):
+
+- [ ] **`dose_kg_product_ha` and `lime_material_dose_t_ha` divide without
+      a guard of their own**, and are safe only because every current call
+      site goes through `highest_rated`'s `> 0.0` filter first. Move the
+      guard in, or state the precondition in their doc comments — the same
+      shape of bug was live in `net_requirement_kg_ha` until session 9.
+- [ ] **Decide what `AnnualClimatology::min_temp_c` / `humidity_pct` /
+      `wind_ms` are for.** The POWER adapter fills all three; no rule reads
+      any of them. Either a rule should consume them or they should go.
 
 ## One item worth knowing about
 
