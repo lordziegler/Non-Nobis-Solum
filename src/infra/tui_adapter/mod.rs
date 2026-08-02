@@ -496,7 +496,8 @@ impl Tui {
             i18n: I18n::new(Language::from_code(&settings.language)),
             theme: theme::by_name(&settings.theme),
             screen: Screen::Dashboard,
-            focus_modules: true,
+            // Home draws no lot column, so its cursor is the launcher menu.
+            focus_modules: false,
             lots: Vec::new(),
             lot_idx: 0,
             menu_idx: 0,
@@ -1020,8 +1021,7 @@ impl Tui {
             Ok(()) => {
                 self.form = None;
                 self.saved_readings = 0;
-                self.screen = Screen::Dashboard;
-                self.focus_modules = true;
+                self.enter(Screen::Dashboard);
                 self.reload();
                 if !self.is_error {
                     self.info(message);
@@ -1139,7 +1139,11 @@ impl Tui {
         let in_target = self.screen == Screen::Target && in_workspace;
         match code {
             KeyCode::Char('?') => self.help = true,
-            KeyCode::Tab | KeyCode::BackTab => self.focus_modules = !self.focus_modules,
+            // Home has one pane, so there is nothing to hand the cursor to:
+            // a `Tab` there would light a lot column that is not drawn.
+            KeyCode::Tab | KeyCode::BackTab if self.screen != Screen::Dashboard => {
+                self.focus_modules = !self.focus_modules
+            }
             KeyCode::Enter => self.activate(),
             KeyCode::Esc => self.back(),
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
@@ -1148,6 +1152,11 @@ impl Tui {
                 self.filtering = true;
                 self.focus_modules = false;
             }
+            // The launcher's menu acts on the selected lot, and Home is the
+            // one screen with no column to move that selection in. `j`/`k`
+            // belong to the menu, so the other axis takes the lot.
+            KeyCode::Char('h') | KeyCode::Left if self.screen == Screen::Dashboard => self.select_lot(-1),
+            KeyCode::Char('l') | KeyCode::Right if self.screen == Screen::Dashboard => self.select_lot(1),
             KeyCode::Char('h') | KeyCode::Left if in_settings => self.change_setting(-1),
             KeyCode::Char('l') | KeyCode::Right if in_settings => self.change_setting(1),
             KeyCode::Char('h') | KeyCode::Left if in_target => self.change_target(-1),
@@ -1383,11 +1392,13 @@ impl Tui {
         }
     }
 
-    /// Land on a screen. The launcher is the only one that opens with the
-    /// module column focused — everywhere else the workspace is the point.
+    /// Land on a screen with the cursor in the workspace, which is where
+    /// the point of every screen is — the launcher's menu on Home, the
+    /// stage body everywhere else. `Tab` is what hands it to the lot column
+    /// on the screens that draw one.
     fn enter(&mut self, screen: Screen) {
         self.screen = screen;
-        self.focus_modules = screen == Screen::Dashboard;
+        self.focus_modules = false;
         self.scroll = 0;
         // Stage ③ always opens on the goal: it is the thing the flow came
         // here for, and the basis has a working default.
@@ -1475,8 +1486,7 @@ impl Tui {
             // A half-typed lot is not a draft.
             self.form = None;
             self.picker = None;
-            self.screen = Screen::Dashboard;
-            self.focus_modules = true;
+            self.enter(Screen::Dashboard);
         }
     }
 
@@ -1678,15 +1688,22 @@ mod tests {
     #[test]
     fn the_launcher_menu_is_walked_with_the_cursor_and_run_with_enter() {
         let mut tui = tui();
-        tui.screen = Screen::Dashboard;
-        // Tab hands j/k from the lot column to the menu.
-        press(&mut tui, KeyCode::Tab);
+        tui.enter(Screen::Dashboard);
+        // Home has one pane and the menu is it: the cursor lands there.
         assert!(!tui.focus_modules);
 
         let lot = tui.selected_lot().expect("a lot").field_id.clone();
         press(&mut tui, KeyCode::Char('j'));
         assert_eq!(tui.menu_idx, 1, "the cursor walks the menu, not the lots");
         assert_eq!(tui.selected_lot().expect("a lot").field_id, lot, "and the lot under it does not move");
+
+        // The other axis is what moves the lot the menu acts on, since
+        // there is no column to move it in.
+        press(&mut tui, KeyCode::Char('l'));
+        assert_ne!(tui.selected_lot().expect("a lot").field_id, lot, "h/l picks the subject");
+        press(&mut tui, KeyCode::Char('h'));
+        assert_eq!(tui.selected_lot().expect("a lot").field_id, lot);
+        assert_eq!(tui.menu_idx, 1, "and leave the menu cursor where it was");
 
         // Row 1 is New lot, and Enter is what runs it.
         press(&mut tui, KeyCode::Enter);
@@ -2003,7 +2020,7 @@ mod tests {
         // more, because the column is the lot list rather than a menu.
         press(&mut tui, KeyCode::Esc);
         assert_eq!(tui.screen, Screen::Dashboard);
-        assert!(tui.focus_modules, "and the lot list takes the cursor back");
+        assert!(!tui.focus_modules, "and Home's cursor is its own menu, the only pane it draws");
     }
 
     /// Stage 3 edits the goal in place: a nudge starts from whatever the

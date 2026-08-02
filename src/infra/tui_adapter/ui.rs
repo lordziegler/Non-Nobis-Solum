@@ -183,26 +183,25 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
     context_bar(frame, top, tui);
     statusline(frame, bottom, tui);
 
-    // Home is a screen like the others, not a splash: the lot column has to
-    // be on it, because `j`/`k` and every lot key act on the selection this
-    // column is the only view of. Giving the wordmark the whole body left
-    // those keys driving a list nobody could see.
-    //
-    // Two columns there rather than three: the status column answers for a
-    // scenario, and Home has no question open — its readiness line already
-    // says what is loaded. The room goes to the banner instead.
-    let columns = if body.width < NARROW {
-        vec![Constraint::Length(24), Constraint::Min(0)]
-    } else if tui.screen == Screen::Dashboard {
-        vec![Constraint::Length(26), Constraint::Min(0)]
+    // Home is the launcher, not a tile in the mosaic: it takes the whole
+    // body, which is what puts the wordmark on its grandest tier instead of
+    // on the monogram a 26-column list next to it forced. The lot the menu
+    // acts on is named on both bars and moved with `h`/`l`, so nothing here
+    // depends on seeing the list.
+    if tui.screen == Screen::Dashboard {
+        launcher(frame, body, tui);
     } else {
-        vec![Constraint::Length(26), Constraint::Min(0), Constraint::Length(32)]
-    };
-    let panes = Layout::horizontal(columns).split(body);
-    lots_pane(frame, panes[0], tui);
-    workspace(frame, panes[1], tui);
-    if let Some(area) = panes.get(2) {
-        status_pane(frame, *area, tui);
+        let columns = if body.width < NARROW {
+            vec![Constraint::Length(24), Constraint::Min(0)]
+        } else {
+            vec![Constraint::Length(26), Constraint::Min(0), Constraint::Length(32)]
+        };
+        let panes = Layout::horizontal(columns).split(body);
+        lots_pane(frame, panes[0], tui);
+        workspace(frame, panes[1], tui);
+        if let Some(area) = panes.get(2) {
+            status_pane(frame, *area, tui);
+        }
     }
 
     if tui.picker.is_some() {
@@ -288,29 +287,35 @@ fn context_bar(frame: &mut Frame, area: Rect, tui: &Tui) {
         right.push(Span::styled(format!("{value} "), style));
     };
     // Scenario figures belong to the flow that answers for them; on the
-    // launcher or a form they would only be numbers with no question.
-    if stage_index(tui.screen).is_none() {
-        return frame.render_widget(Paragraph::new(Line::from(left)), inner);
-    }
-    if let Some(target) = tui.typed_yield_target().or_else(|| tui.curated_yield_target().cloned()) {
-        chip(
-            tui.i18n.t("plan_yield_target").to_string(),
-            format!("{} {}", target.value, target.unit),
-            tui.theme.strong(),
-        );
-    }
-    chip(
-        tui.i18n.t("target_method").to_string(),
-        tui.i18n.t(demand_mode_id(tui.demand_mode)).to_string(),
-        tui.theme.ok(),
-    );
-    if let Some(plan) = &tui.plan {
-        if let Some(entry) = plan.nutrient_results.iter().find(|entry| entry.nutrient == Nutrient::N) {
+    // launcher or a form they would only be numbers with no question. What
+    // Home does need is the *subject*: its menu acts on the selected lot,
+    // and with no lot column beside it this bar is what names the lot.
+    if stage_index(tui.screen).is_some() {
+        if let Some(target) = tui.typed_yield_target().or_else(|| tui.curated_yield_target().cloned()) {
             chip(
-                format!("{} N", tui.i18n.t("col_efficiency")),
-                format!("{:.0}%", entry.efficiency_used * 100.0),
-                tui.theme.accent(),
+                tui.i18n.t("plan_yield_target").to_string(),
+                format!("{} {}", target.value, target.unit),
+                tui.theme.strong(),
             );
+        }
+        chip(
+            tui.i18n.t("target_method").to_string(),
+            tui.i18n.t(demand_mode_id(tui.demand_mode)).to_string(),
+            tui.theme.ok(),
+        );
+        if let Some(plan) = &tui.plan {
+            if let Some(entry) = plan.nutrient_results.iter().find(|entry| entry.nutrient == Nutrient::N) {
+                chip(
+                    format!("{} N", tui.i18n.t("col_efficiency")),
+                    format!("{:.0}%", entry.efficiency_used * 100.0),
+                    tui.theme.accent(),
+                );
+            }
+        }
+    } else if tui.screen == Screen::Dashboard {
+        if let Some(lot) = tui.lots.get(tui.lot_idx) {
+            let crop = tui.active_crop().map(|crop| format!(" · {crop}")).unwrap_or_default();
+            chip(tui.i18n.t("st_lot").to_string(), format!("{}{crop}", lot.field_id), tui.theme.strong());
         }
     }
 
@@ -495,10 +500,9 @@ fn lots_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
 
     // The same verbs the launcher's menu spells out, folded into one line
     // each so the actions stay visible on the screens that have no menu.
-    // On Home the menu is right there, and saying it twice is noise.
+    // Home is not one of them: the column is not drawn there at all.
     let legend: Vec<Line> = LOT_ACTIONS
         .iter()
-        .filter(|_| tui.screen != Screen::Dashboard)
         .map(|(label, key, glyph)| {
             let label = tui.i18n.t(label);
             let gap = (body.width as usize).saturating_sub(label.chars().count() + 6);
@@ -1123,14 +1127,17 @@ fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
 /// Column headings for the readings, laid out by hand rather than as a
 /// `Table`: the whole stage is one scrollable page, and a table widget
 /// would not scroll with the provenance under it.
+///
+/// No source column: it was a fourth column of `Castro_Gomez_2009_tabla12_…`
+/// strings clipped mid-token, and the provenance block at the bottom of this
+/// same page already names every reference in full.
 fn reading_header<'a>(tui: &Tui) -> Line<'a> {
     Line::styled(
         format!(
-            "  {:<20}{:>8}  {:<22}{}",
+            "  {:<20}{:>8}  {}",
             tui.i18n.t("col_parameter").to_uppercase(),
             tui.i18n.t("col_value").to_uppercase(),
             tui.i18n.t("col_category").to_uppercase(),
-            tui.i18n.t("inspect_source").to_uppercase()
         ),
         tui.theme.muted(),
     )
@@ -1152,8 +1159,7 @@ fn reading_row<'a>(tui: &Tui, reading: &crate::core::domain::PropertyAssessment)
     Line::from(vec![
         Span::styled(format!("  {:<20}", reading.property.replace('_', " ")), tui.theme.muted()),
         Span::styled(format!("{:>8}", format!("{:.2}", reading.value)), tui.theme.accent()),
-        Span::styled(format!("  {category:<22}"), style),
-        Span::styled(reading.source.clone().unwrap_or_default(), tui.theme.muted()),
+        Span::styled(format!("  {category}"), style),
     ])
 }
 
@@ -2011,12 +2017,16 @@ mod tests {
             // it owns the whole body, so it carries its own way in.
             for (width, height) in [(80, 24), (130, 40)] {
                 let out = render(&tui, width, height);
-                let expected = if screen == Screen::Dashboard {
-                    tui.i18n.t("action_plan").to_string()
+                let column = tui.i18n.t("lots").to_uppercase();
+                if screen == Screen::Dashboard {
+                    assert!(
+                        out.contains(&tui.i18n.t("action_plan").to_string()),
+                        "Home at {width}x{height} lost its menu"
+                    );
+                    assert!(!out.contains(&column), "and the launcher owns the whole body");
                 } else {
-                    tui.i18n.t("lots").to_uppercase()
-                };
-                assert!(out.contains(&expected), "{screen:?} at {width}x{height} lost its navigation");
+                    assert!(out.contains(&column), "{screen:?} at {width}x{height} lost its navigation");
+                }
             }
         }
 
@@ -2130,38 +2140,37 @@ mod tests {
 
         // Every number here is a layout *budget*, measured against the real
         // render rather than reasoned about: the banner competes with the
-        // lot column beside it and the menu below it, so all of them move
-        // whenever either does. A failure here is the test doing its job —
-        // re-measure the ladder, don't just bump the number.
+        // menu below it for the whole body, so both move whenever either
+        // does. A failure here is the test doing its job — re-measure the
+        // ladder, don't just bump the number.
         assert!(render(&tui, 150, 40).contains(WORDMARK_WIDE[0]), "a roomy terminal gets the whole name across");
         // The one-liner is only 8 rows: a wide terminal that is short still
         // says the whole name.
         assert!(render(&tui, 150, 28).contains(WORDMARK_WIDE[0]), "height is not what the one-liner needs");
 
         // Too narrow for one line, tall enough to break it over two.
-        let broken = render(&tui, 140, 40);
+        let broken = render(&tui, 100, 36);
         assert!(broken.contains(WORDMARK_LOCKUP[0]), "the lockup takes the width the one-liner can't have");
         assert!(!broken.contains(WORDMARK_WIDE[0]), "and the one-liner stands down instead of clipping");
 
         // Narrower still, but tall enough to stack the name three deep
         // instead — which is the whole point of having tiers.
-        let narrow = render(&tui, 90, 41);
+        let narrow = render(&tui, 60, 42);
         assert!(narrow.contains(WORDMARK_TALL[0]), "the stack takes the space the lockup can't use");
         assert!(!narrow.contains(WORDMARK_LOCKUP[0]), "and the lockup stands down in turn");
 
-        // Same width, too short to stack: the monogram is the next rung.
-        let squat = render(&tui, 90, 33);
+        // Same width, too short to stack: the monogram is the next rung,
+        // which is what a small terminal is meant to land on.
+        let squat = render(&tui, 60, 33);
         assert!(squat.contains(WORDMARK_MARK[0]), "the monogram fits where the stack cannot");
         assert!(!squat.contains(WORDMARK_TALL[0]), "and the stack stands down in turn");
 
-        // The point of having a monogram at all: a *small* panel is where a
-        // mark beats a name, and it was the one place the mark never
-        // appeared. `WORDMARK_MARK` is 41 columns — wider than the stacked
-        // name it falls back from — so no width could ever reach it, and a
-        // half-screen terminal got a bare line of text instead.
-        let small = render(&tui, 60, 41);
-        assert!(small.contains(WORDMARK_SMALL[0]), "a small panel is what a monogram is for");
-        assert!(!small.contains(WORDMARK_TALL[0]), "and it is reached by standing the stack down");
+        // Narrower than the monogram: the block-letter mark is the floor of
+        // the art, and blackletter gives way to it rather than being scaled
+        // into mush.
+        let small = render(&tui, 40, 42);
+        assert!(small.contains(WORDMARK_SMALL[0]), "a small panel is what a mark is for");
+        assert!(!small.contains(WORDMARK_MARK[0]), "and it is reached by standing the monogram down");
 
         // Wide but short, which is the other way to be out of room.
         let squat_wide = render(&tui, 150, 25);
@@ -2250,6 +2259,7 @@ mod tests {
         assert_eq!(glyphs(10.0, 0.0), "░░░░", "no demand must not divide by zero");
     }
 }
+
 
 
 
