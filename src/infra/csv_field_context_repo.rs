@@ -26,6 +26,16 @@ struct FieldContextRow {
     latitude: Option<f64>,
     #[serde(default)]
     longitude: Option<f64>,
+    /// Metres above sea level, the key Tabla 4 reads organic matter
+    /// against. Optional so rows written before the column existed still
+    /// parse.
+    #[serde(default)]
+    altitude_m: Option<f64>,
+    /// Planted hectares. Optional for the same reason as the coordinates:
+    /// rows written before the column existed still parse, and a lot
+    /// without one is planned per hectare.
+    #[serde(default)]
+    area_ha: Option<f64>,
 }
 
 pub struct CsvFieldContextRepo {
@@ -63,6 +73,8 @@ impl TryFrom<FieldContextRow> for FieldContext {
             region: row.region,
             latitude: row.latitude,
             longitude: row.longitude,
+            altitude_m: row.altitude_m,
+            area_ha: row.area_ha,
         })
     }
 }

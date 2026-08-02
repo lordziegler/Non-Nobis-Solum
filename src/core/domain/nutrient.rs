@@ -34,6 +34,20 @@ impl Nutrient {
     pub const MACRONUTRIENTS: [Nutrient; 6] =
         [Nutrient::N, Nutrient::P, Nutrient::K, Nutrient::S, Nutrient::Ca, Nutrient::Mg];
 
+    /// Planned on a different basis from the macronutrients, not as a
+    /// lesser version of them.
+    ///
+    /// AGRONOMIC_NOTE: the source removal tables (Tabla 10/11) report no
+    /// micronutrient coefficient for any crop, so there is no "what the
+    /// harvest takes" figure to replace — and there would be little point
+    /// if there were, since a crop's micronutrient offtake is grams per
+    /// hectare against a soil reserve of kilograms. What matters is
+    /// whether the soil holds enough for uptake to happen at all, so these
+    /// are corrected against their critical level rather than balanced
+    /// against a removal. See `CalculateFertilityPlan::correct_micronutrients`.
+    pub const MICRONUTRIENTS: [Nutrient; 6] =
+        [Nutrient::Fe, Nutrient::Mn, Nutrient::Zn, Nutrient::Cu, Nutrient::B, Nutrient::Mo];
+
     /// So a front-end can offer the closed set instead of asking for an id
     /// `from_str` might reject. Same role as `Texture::ALL`.
     pub const ALL: [Nutrient; 14] = [

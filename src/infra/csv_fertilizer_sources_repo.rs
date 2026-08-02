@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
-use crate::core::domain::{DomainError, FertilizerSource, Nutrient};
+use crate::core::domain::{DomainError, FertilizerForm, FertilizerSource, Nutrient};
 use crate::core::ports::FertilizerSourceRepository;
 
 #[derive(Debug, Deserialize)]
@@ -16,6 +16,11 @@ struct FertilizerSourceRow {
     nutrient_id: String,
     pct: f64,
     density_kg_l: Option<f64>,
+    /// Optional so a catalog written before the column still loads. An
+    /// absent column and an empty cell both mean `Unknown`; a cell with
+    /// something unrecognised in it fails the load by name.
+    #[serde(default)]
+    form: Option<String>,
     restrictions: Option<String>,
 }
 
@@ -38,6 +43,8 @@ impl FertilizerSourceRepository for CsvFertilizerSourcesRepo {
         for row in reader.deserialize::<FertilizerSourceRow>() {
             let row = row.map_err(|e| DomainError::DataSource(e.to_string()))?;
             let nutrient = Nutrient::from_str(&row.nutrient_id)?;
+            let form = FertilizerForm::from_str(row.form.as_deref().unwrap_or_default())
+                .map_err(|e| DomainError::DataSource(format!("{}, source_id={}: {e}", self.path.display(), row.source_id)))?;
             let restrictions = row
                 .restrictions
                 .filter(|s| !s.is_empty())
@@ -50,12 +57,21 @@ impl FertilizerSourceRepository for CsvFertilizerSourcesRepo {
                     if source.density_kg_l.is_none() {
                         source.density_kg_l = row.density_kg_l;
                     }
+                    // One product, one form. A second row naming a
+                    // different one is a blend of forms, not a correction.
+                    if source.form != form {
+                        source.form = match (source.form, form) {
+                            (FertilizerForm::Unknown, stated) | (stated, FertilizerForm::Unknown) => stated,
+                            _ => FertilizerForm::Mixed,
+                        };
+                    }
                 }
                 None => sources.push(FertilizerSource {
                     source_id: row.source_id,
                     name: row.name,
                     composition_pct: vec![(nutrient, row.pct)],
                     density_kg_l: row.density_kg_l,
+                    form,
                     restrictions,
                 }),
             }

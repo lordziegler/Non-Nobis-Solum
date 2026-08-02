@@ -1,237 +1,136 @@
-# Nutrient use efficiency ranges by texture and irrigation system.
-# Generalized from the N/P/K efficiency rules in Non-Nobis-Solum-Py
-# (n.py/p.py/k.py) to the full texture x irrigation-system grid; S/Ca/Mg
-# are treated as amendments applied near their full theoretical value.
-- texture: "loam"
-  irrigation: "rainfed"
+# Nutrient use efficiency ranges, as the fraction of applied nutrient the
+# crop actually recovers. `net_requirement_kg_ha` divides by the midpoint
+# of the range, so halving an efficiency doubles the dose.
+#
+# ---------------------------------------------------------------------------
+# HOW TO READ THIS FILE
+#
+# A row keyed on a real texture/irrigation pair wins; otherwise lookup
+# falls back to the sentinel row (texture "any", irrigation "any"). Rows
+# can therefore be added one class at a time without touching code.
+#
+# Every nutrient now carries a single sentinel range, because a single
+# range is all anyone has actually specified for any of them. A per-texture
+# grid invented by scaling a constant would look like knowledge and be
+# noise.
+#
+# The ranges for P, K, S, Ca, Mg and the micronutrients were set by the
+# project's agronomist. P (10-20%) and S (10-30%) coincide with the
+# meta-analyses tabulated in the workflow reference (Yu et al. 2021 for P;
+# Aula et al. 2019 for S); the 40-60% for the exchangeable bases is a
+# working figure pending per-class field data.
+# ---------------------------------------------------------------------------
+
+# ---- Nitrogen: 30-50% -------------------------------------------------------
+# Reconciled against the workflow reference's meta-analysis (Yu et al.
+# 2022). This replaced the prototype's 0.45-0.80 texture x irrigation
+# sub-grid, which sat entirely above the literature band: its most
+# pessimistic cell (0.45) was above this range's midpoint.
+#
+# The sub-grid was DELETED rather than rescaled into the band. Its four
+# cells came from the same prototype whose S/Ca/Mg figures were already
+# discarded as fabricated, so squeezing them into a literature range would
+# have dressed unsourced numbers in a citation. This is the same call
+# session 10 made for potassium, for the same reason.
+#
+# The textural signal for N is real agronomy — a sandy soil under flood
+# irrigation does leach more than a clay loam under drip — and losing it
+# is the cost of not inventing it. An exact texture/irrigation row still
+# wins over this sentinel, so measured per-class data lands one row at a
+# time with no code change.
+- texture: "any"
+  irrigation: "any"
   nutrient: "N"
-  efficiency_min: 0.55
-  efficiency_max: 0.65
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "drip"
-  nutrient: "N"
-  efficiency_min: 0.70
-  efficiency_max: 0.80
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "rainfed"
-  nutrient: "N"
-  efficiency_min: 0.45
-  efficiency_max: 0.55
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "drip"
-  nutrient: "N"
-  efficiency_min: 0.60
-  efficiency_max: 0.70
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "rainfed"
-  nutrient: "P"
-  efficiency_min: 0.45
-  efficiency_max: 0.55
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "drip"
-  nutrient: "P"
-  efficiency_min: 0.45
-  efficiency_max: 0.55
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "rainfed"
-  nutrient: "P"
-  efficiency_min: 0.35
-  efficiency_max: 0.45
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "drip"
-  nutrient: "P"
-  efficiency_min: 0.35
-  efficiency_max: 0.45
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "rainfed"
-  nutrient: "K"
-  efficiency_min: 0.50
-  efficiency_max: 0.60
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "drip"
-  nutrient: "K"
-  efficiency_min: 0.57
-  efficiency_max: 0.67
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "rainfed"
-  nutrient: "K"
-  efficiency_min: 0.40
+  efficiency_min: 0.30
   efficiency_max: 0.50
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "drip"
-  nutrient: "K"
-  efficiency_min: 0.47
-  efficiency_max: 0.57
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "rainfed"
-  nutrient: "S"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "drip"
-  nutrient: "S"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "rainfed"
-  nutrient: "S"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "drip"
-  nutrient: "S"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "rainfed"
-  nutrient: "Ca"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "drip"
-  nutrient: "Ca"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "rainfed"
-  nutrient: "Ca"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "drip"
-  nutrient: "Ca"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "rainfed"
-  nutrient: "Mg"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "loam"
-  irrigation: "drip"
-  nutrient: "Mg"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "rainfed"
-  nutrient: "Mg"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
-  region: "global"
-- texture: "clay_loam"
-  irrigation: "drip"
-  nutrient: "Mg"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "Non_Nobis_Solum_Py_prototype_generalized"
+  source: "Yu_et_al_2022_meta_analysis_via_workflow_reference"
   region: "global"
 
-# ---------------------------------------------------------------------------
-# FALLBACK ROWS — NOT LITERATURE. READ BEFORE TRUSTING A NUMBER BELOW.
-#
-# The rows above cover 4 of the domain's 48 texture x irrigation
-# combinations. The other 44 need real per-class efficiency data that has
-# not been transcribed yet; inventing them would be worse than admitting
-# the gap. These sentinel rows (texture "any", irrigation "any") are what
-# `YamlEfficiencyRulesRepo` falls back to when no exact row matches, so a
-# lot outside the curated grid still gets a plan instead of an error.
-#
-# Each value is mechanically derived from the rows above, not measured:
-#   efficiency_min = the lowest efficiency_min of that nutrient's covered rows
-#   efficiency_max = the highest efficiency_max of that nutrient's covered rows
-# i.e. the envelope of everything this profile actually knows about that
-# nutrient. The midpoint the use case works with therefore lands on the
-# average of the covered combinations, and the width of the range is an
-# honest statement of how little is known.
-#
-# Replace each of these with real per-texture-class data when an agronomist
-# provides it — an exact row always wins over the sentinel, so rows can be
-# added one at a time without touching code.
-# ---------------------------------------------------------------------------
-- texture: "any"
-  irrigation: "any"
-  nutrient: "N"
-  efficiency_min: 0.45
-  efficiency_max: 0.80
-  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
-  region: "global"
+# ---- Phosphorus: 10-20% -----------------------------------------------------
+# Most of what is applied is fixed by the soil before the crop reaches it.
 - texture: "any"
   irrigation: "any"
   nutrient: "P"
-  efficiency_min: 0.35
-  efficiency_max: 0.55
-  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
   region: "global"
+
+# ---- Sulphur: 10-30% --------------------------------------------------------
+- texture: "any"
+  irrigation: "any"
+  nutrient: "S"
+  efficiency_min: 0.10
+  efficiency_max: 0.30
+  source: "agronomist_specified_2026-07"
+  region: "global"
+
+# ---- Exchangeable bases: 40-60% ---------------------------------------------
 - texture: "any"
   irrigation: "any"
   nutrient: "K"
   efficiency_min: 0.40
-  efficiency_max: 0.67
-  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
-  region: "global"
-- texture: "any"
-  irrigation: "any"
-  nutrient: "S"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  efficiency_max: 0.60
+  source: "agronomist_specified_2026-07"
   region: "global"
 - texture: "any"
   irrigation: "any"
   nutrient: "Ca"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  efficiency_min: 0.40
+  efficiency_max: 0.60
+  source: "agronomist_specified_2026-07"
   region: "global"
 - texture: "any"
   irrigation: "any"
   nutrient: "Mg"
-  efficiency_min: 0.90
-  efficiency_max: 1.00
-  source: "documented_fallback_NOT_literature_envelope_of_covered_rows"
+  efficiency_min: 0.40
+  efficiency_max: 0.60
+  source: "agronomist_specified_2026-07"
+  region: "global"
+
+# ---- Micronutrients: 10-20% -------------------------------------------------
+# Recorded, but nothing reads them yet: the plan iterates
+# `Nutrient::MACRONUTRIENTS` only. They are here so that wiring
+# micronutrients up later is a code change and not another data hunt.
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Fe"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Mn"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Zn"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Cu"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "B"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
+  region: "global"
+- texture: "any"
+  irrigation: "any"
+  nutrient: "Mo"
+  efficiency_min: 0.10
+  efficiency_max: 0.20
+  source: "agronomist_specified_2026-07"
   region: "global"

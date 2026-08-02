@@ -2,14 +2,50 @@
 //! Ported and generalized from the `Non-Nobis-Solum-Py` prototype
 //! (n.py/p.py/k.py availability and net-requirement formulas).
 
-use super::entities::AnnualClimatology;
+use super::entities::{AnnualClimatology, QualitativeBand};
 use super::value_objects::IrrigationSystem;
 
-/// Fraction of total soil N assumed to mineralize annually, absent any
-/// climate data. The prototype's hardcoded 1.5% (`n.py`) — now the
-/// *baseline* that [`mineralization_factor`] modulates rather than the
-/// only available value.
+/// Fraction of total soil N assumed to mineralize annually when nothing
+/// is known about the site. The prototype's hardcoded 1.5% (`n.py`), and
+/// the documented *average* of the admissible range — not its optimum.
+/// [`mineralization_factor`] modulates it rather than replacing it.
 pub const BASELINE_MINERALIZATION_FACTOR: f64 = 0.015;
+
+/// Upper bound of the admissible annual mineralization rate (the workflow
+/// reference gives `f` as 0.00–0.30).
+///
+/// AGRONOMIC_NOTE: this is a guard on the model's output, not a target it
+/// is expected to reach. Temperature and water alone cannot carry a soil
+/// from the 1.5% average to 30% — the top of that range belongs to fresh
+/// labile organic inputs (green manure, recent residue incorporation,
+/// manure), which this engine has no data about. A climate-only model
+/// that reached 0.30 would be lying about how much it knows.
+pub const MAX_MINERALIZATION_FACTOR: f64 = 0.30;
+
+/// Temperature at which the mineralization response equals 1.0, i.e.
+/// where [`BASELINE_MINERALIZATION_FACTOR`] applies unmodified.
+///
+/// AGRONOMIC_NOTE: 20 °C, not the 25 °C this used to assume. 25 °C is the
+/// rough *optimum* for tropical mineralization, and anchoring an average
+/// at an optimum makes every site on Earth read below average. 20 °C is a
+/// mean growing-season temperature for which 1.5%/yr is a defensible
+/// textbook figure. This is a calibration knob: move it if field
+/// measurements say otherwise.
+const MINERALIZATION_REFERENCE_TEMP_C: f64 = 20.0;
+
+/// Q10 — how many times faster the microbial population mineralizes per
+/// 10 °C of warming. 2.0 is the standard soil-biology value.
+const MINERALIZATION_Q10: f64 = 2.0;
+
+/// Floor of the water response. Even a soil in seasonal drought or under
+/// standing water mineralizes during the spells when it is neither, so
+/// the moisture term narrows the rate rather than switching it off.
+const WATER_RESPONSE_FLOOR: f64 = 0.5;
+
+/// Response lost per unit of aridity index above 1.0, i.e. how fast
+/// waterlogging suppresses aerobic mineralization once rainfall exceeds
+/// evaporative demand.
+const WATERLOGGING_DECLINE_PER_INDEX: f64 = 0.25;
 
 /// Mass of dry soil per hectare down to the arable depth, in kg/ha.
 /// `bulk_density_kg_dm3` is DAP (apparent density, kg/dm3 == g/cm3).
@@ -58,8 +94,15 @@ pub fn net_requirement_kg_ha(demand_kg_ha: f64, availability_kg_ha: f64, efficie
 /// Product dose, in kg of commercial product per ha, needed to deliver
 /// `net_requirement_kg_ha` of a nutrient present at `nutrient_pct_in_source`
 /// percent by weight.
-pub fn dose_kg_product_ha(net_requirement_kg_ha: f64, nutrient_pct_in_source: f64) -> f64 {
-    net_requirement_kg_ha / (nutrient_pct_in_source / 100.0)
+///
+/// `None` when the grade is not a usable divisor. Callers reach this
+/// through `highest_rated`, which already drops non-positive and NaN
+/// grades — but that coupling is invisible from here, and the identical
+/// unguarded division in `net_requirement_kg_ha` printed `inf kg/ha Urea`
+/// as a recommendation until session 9 caught it. The guard lives in the
+/// function so a second call site cannot reintroduce it.
+pub fn dose_kg_product_ha(net_requirement_kg_ha: f64, nutrient_pct_in_source: f64) -> Option<f64> {
+    (nutrient_pct_in_source > 0.0).then(|| net_requirement_kg_ha / (nutrient_pct_in_source / 100.0))
 }
 
 /// Effective cation exchange capacity (CICE), cmolc/kg: the sum of acid
@@ -106,90 +149,126 @@ pub fn prnt(neutralizing_value_pct: f64, granulometric_efficiency_pct: f64) -> f
 
 /// Product dose, in t of liming material per ha, needed to deliver
 /// `caco3_eq_required_t_ha` given a material at `prnt_pct` PRNT.
-pub fn lime_material_dose_t_ha(caco3_eq_required_t_ha: f64, prnt_pct: f64) -> f64 {
-    caco3_eq_required_t_ha / (prnt_pct / 100.0)
+///
+/// `None` for a material with no neutralizing power — see
+/// [`dose_kg_product_ha`] for why the guard is here and not at the call
+/// site.
+pub fn lime_material_dose_t_ha(caco3_eq_required_t_ha: f64, prnt_pct: f64) -> Option<f64> {
+    (prnt_pct > 0.0).then(|| caco3_eq_required_t_ha / (prnt_pct / 100.0))
+}
+
+/// Aluminum saturation, as the percent of CICE held by exchangeable Al³⁺.
+///
+/// AGRONOMIC_NOTE: the figure crop Al tolerance is actually stated
+/// against, and the one Tabla 12's acidity diagnosis keys on. A soil can
+/// carry 2 cmolc/kg of Al harmlessly at high CICE and toxically at low
+/// CICE, so the absolute Al reading on its own does not say whether roots
+/// are being damaged.
+pub fn aluminum_saturation_pct(al_cmolc_kg: f64, cice_cmolc_kg: f64) -> f64 {
+    if cice_cmolc_kg <= 0.0 {
+        return 0.0;
+    }
+    (al_cmolc_kg / cice_cmolc_kg * 100.0).clamp(0.0, 100.0)
+}
+
+/// The five cation balance ratios of Tabla 12's "balance de bases" block.
+///
+/// AGRONOMIC_NOTE: these diagnose *antagonism*, which the per-nutrient
+/// critical levels cannot see. Ca, Mg and K compete for the same root
+/// uptake sites, so a soil can hold an adequate absolute level of every
+/// one of them and still starve the crop of potassium because calcium and
+/// magnesium crowd it out. That is why a plan can report K as "medium"
+/// against its own threshold while (Ca+Mg)/K says the crop will not get
+/// it.
+///
+/// Every input must be in cmolc/kg — these are charge-equivalent ratios,
+/// and computing them from mg/kg gives a different number with the same
+/// shape, which is the worst kind of wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CationRatios {
+    pub ca_to_mg: Option<f64>,
+    pub mg_to_k: Option<f64>,
+    pub k_to_mg: Option<f64>,
+    pub ca_to_k: Option<f64>,
+    pub ca_plus_mg_to_k: Option<f64>,
+}
+
+pub fn cation_ratios(ca_cmolc_kg: f64, mg_cmolc_kg: f64, k_cmolc_kg: f64) -> CationRatios {
+    // A cation the lab did not report arrives here as 0.0, and a ratio
+    // over it is not "infinitely unbalanced", it is unknown.
+    let ratio = |numerator: f64, denominator: f64| (denominator > 0.0).then(|| numerator / denominator);
+    CationRatios {
+        ca_to_mg: ratio(ca_cmolc_kg, mg_cmolc_kg),
+        mg_to_k: ratio(mg_cmolc_kg, k_cmolc_kg),
+        k_to_mg: ratio(k_cmolc_kg, mg_cmolc_kg),
+        ca_to_k: ratio(ca_cmolc_kg, k_cmolc_kg),
+        ca_plus_mg_to_k: ratio(ca_cmolc_kg + mg_cmolc_kg, k_cmolc_kg),
+    }
+}
+
+/// The band of a qualitative interpretation table containing `value`, or
+/// `None` where the table names none — see [`QualitativeBand`].
+pub fn classify_band(bands: &[QualitativeBand], value: f64) -> Option<&QualitativeBand> {
+    bands.iter().find(|band| band.contains(value))
 }
 
 // ---- Climate-modulated agronomy --------------------------------------------
 // Everything below takes plain f64s already resolved by an adapter. No IO
 // happens here; `AgroclimaticRepository` fetches, these functions decide.
 
-/// Annual N mineralization factor, modulating
-/// [`BASELINE_MINERALIZATION_FACTOR`] by temperature and water:
-/// `f = 0.015 * T_factor * W_factor`.
+/// Temperature response of mineralization, 1.0 at
+/// [`MINERALIZATION_REFERENCE_TEMP_C`], doubling per 10 °C.
 ///
-/// AGRONOMIC_NOTE: mineralization is microbial, so it tracks soil warmth
-/// and moisture. The 25 °C reference is the rough optimum for tropical
-/// mineralization; an Andean lot near 10 °C therefore yields ~0.4x the
-/// tropical baseline, which is the agronomically expected direction.
-/// Water only limits under rainfed conditions — under irrigation the
-/// grower supplies what the rain doesn't, so `W_factor` is pinned at 1.0.
-/// Both factors are clamped: this is a coarse correction, and letting an
-/// extreme grid cell swing N availability by an order of magnitude would
-/// be false precision.
-pub fn mineralization_factor(mean_temp_c: f64, annual_precip_mm: f64, irrigation: &IrrigationSystem) -> f64 {
-    let t_factor = (mean_temp_c / 25.0).clamp(0.5, 2.0);
-    let w_factor = match irrigation {
-        IrrigationSystem::Rainfed => (annual_precip_mm / 800.0).clamp(0.5, 1.5),
+/// AGRONOMIC_NOTE: Q10 replaces the linear `T / 25` this used to be.
+/// Microbial rates are exponential in temperature, and the linear form
+/// got the direction right but the magnitude wrong at both ends — it
+/// under-penalised cold soils and over-rewarded hot ones.
+fn temperature_response(mean_temp_c: f64) -> f64 {
+    MINERALIZATION_Q10.powf((mean_temp_c - MINERALIZATION_REFERENCE_TEMP_C) / 10.0)
+}
+
+/// Moisture response of mineralization against the aridity index
+/// (annual precipitation / annual ET0), peaking at 1.0 where rainfall
+/// just meets evaporative demand.
+///
+/// AGRONOMIC_NOTE: unimodal, unlike the monotonic `P / 800` this used to
+/// be. Wetter is only better up to the point where the profile saturates;
+/// past it, anoxia stops the aerobic decomposition that mineralizes N, so
+/// a 3000 mm/yr site must not read as three times better than an 800 mm
+/// one. Using P/ET0 rather than raw millimetres is what makes the same
+/// rainfall mean "wet" in the highlands and "dry" in the lowlands.
+fn water_response(aridity_index: f64) -> f64 {
+    let response = if aridity_index <= 1.0 {
+        aridity_index
+    } else {
+        1.0 - WATERLOGGING_DECLINE_PER_INDEX * (aridity_index - 1.0)
+    };
+    response.clamp(WATER_RESPONSE_FLOOR, 1.0)
+}
+
+/// Annual N mineralization factor for a site:
+/// `f = 0.015 * temperature_response * water_response`, held inside the
+/// admissible `0.0 ..= `[`MAX_MINERALIZATION_FACTOR`].
+///
+/// `None` means the climatology lacks what the model needs, and the
+/// caller should fall back to [`BASELINE_MINERALIZATION_FACTOR`] — a
+/// partial climatology is not obviously better than the documented
+/// average. Water only limits under rainfed conditions: elsewhere the
+/// grower supplies what the rain doesn't, so an irrigated lot needs
+/// temperature alone.
+pub fn mineralization_factor(climate: &AnnualClimatology, irrigation: &IrrigationSystem) -> Option<f64> {
+    let temperature = temperature_response(climate.mean_temp_c?);
+    let water = match irrigation {
+        IrrigationSystem::Rainfed => {
+            // A zero or absent ET0 would divide the aridity index into
+            // infinity or NaN; neither is a soil moisture regime.
+            let et0 = climate.annual_et0_mm().filter(|mm| *mm > 0.0)?;
+            water_response(climate.annual_precip_mm()? / et0)
+        }
         _ => 1.0,
     };
-    BASELINE_MINERALIZATION_FACTOR * t_factor * w_factor
-}
 
-/// Deltas to apply to the *upper* bound of a nutrient's efficiency range.
-/// Always negative or zero: climate signals here can only narrow the
-/// optimistic end of the range, never widen it.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct EfficiencyAdjustment {
-    pub n_max_delta: f64,
-    pub p_max_delta: f64,
-    pub k_max_delta: f64,
-}
-
-/// How much a single unambiguous climate signal narrows an efficiency
-/// range. One conservative step; these are not calibrated coefficients.
-// ponytail: one flat magnitude for all three signals, and they don't
-// compound. Split per-signal if field data ever justifies distinct
-// weights.
-const EFFICIENCY_PENALTY: f64 = 0.05;
-
-/// Narrows nutrient use efficiency where the climatology shows an
-/// unambiguous stress signal. Returns all-zero deltas when the relevant
-/// variables are absent — missing data must never be read as a stressor.
-pub fn efficiency_climate_adjustment(climate: &AnnualClimatology, irrigation: &IrrigationSystem) -> EfficiencyAdjustment {
-    let mut adjustment = EfficiencyAdjustment::default();
-    let rainfed = matches!(irrigation, IrrigationSystem::Rainfed);
-
-    // AGRONOMIC_NOTE: above ~35 °C nitrification slows while ammonia
-    // volatilization from surface-applied urea accelerates, so less of the
-    // applied N ever reaches the crop. Keyed on the hottest month rather
-    // than the annual mean: the loss happens during that window regardless
-    // of how mild the rest of the year is.
-    if climate.max_temp_c.is_some_and(|t| t > 35.0) {
-        adjustment.n_max_delta -= EFFICIENCY_PENALTY;
-    }
-
-    // AGRONOMIC_NOTE: P moves to the root by diffusion through soil water.
-    // Under a sustained water deficit the film thins, diffusion slows, and
-    // fertilizer P stays put near the granule instead of reaching the
-    // crop. Only meaningful when rainfall is the sole water supply — an
-    // irrigated lot has no such deficit by definition.
-    if rainfed {
-        if let (Some(et0), Some(precip)) = (climate.annual_et0_mm(), climate.annual_precip_mm()) {
-            if et0 > 1.5 * precip {
-                adjustment.p_max_delta -= EFFICIENCY_PENALTY;
-            }
-        }
-    }
-
-    // AGRONOMIC_NOTE: K⁺ is a weakly held exchangeable cation. Under very
-    // high rainfall it leaches below the root zone, and waterlogged
-    // (anaerobic) soil impairs the root's ability to take up what remains.
-    if rainfed && climate.annual_precip_mm().is_some_and(|p| p > 2000.0) {
-        adjustment.k_max_delta -= EFFICIENCY_PENALTY;
-    }
-
-    adjustment
+    Some((BASELINE_MINERALIZATION_FACTOR * temperature * water).clamp(0.0, MAX_MINERALIZATION_FACTOR))
 }
 
 /// Dimensionless radiation use efficiency index: how much of a reference
@@ -252,7 +331,11 @@ mod tests {
     #[test]
     fn dose_scales_by_grade() {
         // 100 kg N/ha net, urea at 46% N -> ~217.4 kg product/ha.
-        assert!((dose_kg_product_ha(100.0, 46.0) - 217.391).abs() < 0.01);
+        assert!((dose_kg_product_ha(100.0, 46.0).expect("a real grade") - 217.391).abs() < 0.01);
+        // A grade of zero would have divided to infinity and printed
+        // `inf kg/ha Urea` as a recommendation.
+        assert_eq!(dose_kg_product_ha(100.0, 0.0), None);
+        assert_eq!(dose_kg_product_ha(100.0, f64::NAN), None);
     }
 
     #[test]
@@ -313,111 +396,96 @@ mod tests {
     #[test]
     fn lime_material_dose_scales_by_prnt() {
         // 2.25 t CaCO3-eq/ha needed, material at 87.426% PRNT -> ~2.574 t/ha.
-        assert!((lime_material_dose_t_ha(2.25, 87.426) - 2.574).abs() < 0.01);
+        assert!((lime_material_dose_t_ha(2.25, 87.426).expect("a real PRNT") - 2.574).abs() < 0.01);
+        assert_eq!(lime_material_dose_t_ha(2.25, 0.0), None, "a material that neutralizes nothing has no dose");
     }
 
     // ---- Climate-modulated agronomy ----
 
+    /// Builds a rainfed climatology from annual totals, so the tests read
+    /// in the units the agronomy is stated in rather than mm/day.
+    fn climate(mean_temp_c: f64, annual_precip_mm: f64, annual_et0_mm: f64) -> AnnualClimatology {
+        AnnualClimatology {
+            mean_temp_c: Some(mean_temp_c),
+            precip_mm_per_day: Some(annual_precip_mm / 365.0),
+            et0_mm_per_day: Some(annual_et0_mm / 365.0),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn mineralization_factor_matches_pasto_climatology() {
         // NASA POWER at LOT-001's coordinates (1.2136, -77.2811): T2M
-        // 13.17 C, 2.84 mm/day -> 1036.6 mm/yr, rainfed.
-        // T_factor = 13.17/25 = 0.5268; W_factor = 1036.6/800 = 1.29575.
-        // 0.015 * 0.5268 * 1.29575 -> ~0.0102390.
-        let f = mineralization_factor(13.17, 1036.6, &IrrigationSystem::Rainfed);
-        assert!((f - 0.0102390).abs() < 1e-6, "got {f}");
-        // A cold Andean lot must mineralize *less* than the flat baseline.
+        // 13.17 C, 1036.6 mm/yr rain against 1495 mm/yr ET0, rainfed.
+        // temperature = 2^((13.17-20)/10) = 0.6229
+        // aridity     = 1036.6/1495.0     = 0.6934 -> water = 0.6934
+        // 0.015 * 0.6229 * 0.6934 -> ~0.006478.
+        let f = mineralization_factor(&climate(13.17, 1036.6, 1495.0), &IrrigationSystem::Rainfed).expect("full climatology");
+        assert!((f - 0.006478).abs() < 1e-5, "got {f}");
+        // A cold, water-limited Andean lot must mineralize *less* than the
+        // flat average the engine assumes when it knows nothing.
         assert!(f < BASELINE_MINERALIZATION_FACTOR);
     }
 
     #[test]
+    fn mineralization_factor_is_the_baseline_at_reference_conditions() {
+        // 20 C, rainfall exactly meeting evaporative demand: both
+        // responses are 1.0, so the model reproduces the documented
+        // average instead of drifting off it.
+        let f = mineralization_factor(&climate(20.0, 1000.0, 1000.0), &IrrigationSystem::Rainfed).expect("full climatology");
+        assert!((f - BASELINE_MINERALIZATION_FACTOR).abs() < 1e-12, "got {f}");
+    }
+
+    #[test]
+    fn mineralization_factor_doubles_every_ten_degrees() {
+        let cool = mineralization_factor(&climate(20.0, 1000.0, 1000.0), &IrrigationSystem::Rainfed).expect("climatology");
+        let warm = mineralization_factor(&climate(30.0, 1000.0, 1000.0), &IrrigationSystem::Rainfed).expect("climatology");
+        assert!((warm / cool - MINERALIZATION_Q10).abs() < 1e-12, "{warm} / {cool}");
+    }
+
+    #[test]
+    fn waterlogging_suppresses_mineralization_instead_of_boosting_it() {
+        // The bug this replaces: the old `P / 800` term rose without
+        // bound, so a soaking site read as the *best* case. Past the point
+        // where rain meets demand, anoxia has to pull the rate back down.
+        let optimum = mineralization_factor(&climate(20.0, 1000.0, 1000.0), &IrrigationSystem::Rainfed).expect("climatology");
+        let drowned = mineralization_factor(&climate(20.0, 3000.0, 1000.0), &IrrigationSystem::Rainfed).expect("climatology");
+        assert!(drowned < optimum, "{drowned} should be below {optimum}");
+        // ...but never to zero: the floor keeps it a narrowing, not a switch.
+        assert!(drowned >= BASELINE_MINERALIZATION_FACTOR * WATER_RESPONSE_FLOOR);
+    }
+
+    #[test]
     fn mineralization_factor_ignores_rainfall_when_irrigated() {
-        // Same temperature, same (irrelevant) drought: W_factor pinned to 1.0.
-        let dry = mineralization_factor(25.0, 100.0, &IrrigationSystem::Drip);
-        let wet = mineralization_factor(25.0, 3000.0, &IrrigationSystem::Drip);
+        // Same temperature, same (irrelevant) drought: water pinned to 1.0.
+        let dry = mineralization_factor(&climate(20.0, 100.0, 2000.0), &IrrigationSystem::Drip).expect("climatology");
+        let wet = mineralization_factor(&climate(20.0, 3000.0, 800.0), &IrrigationSystem::Drip).expect("climatology");
         assert_eq!(dry, wet);
-        // T_factor is exactly 1.0 at the 25 C reference, so f == baseline.
         assert!((dry - BASELINE_MINERALIZATION_FACTOR).abs() < 1e-12);
     }
 
     #[test]
-    fn mineralization_factor_clamps_both_extremes() {
-        // Arctic + desert, rainfed: floors at 0.5 * 0.5 of baseline.
-        let floor = mineralization_factor(-30.0, 0.0, &IrrigationSystem::Rainfed);
-        assert!((floor - BASELINE_MINERALIZATION_FACTOR * 0.25).abs() < 1e-12);
-        // Hellish + soaking, rainfed: ceilings at 2.0 * 1.5 of baseline.
-        let ceiling = mineralization_factor(80.0, 9000.0, &IrrigationSystem::Rainfed);
-        assert!((ceiling - BASELINE_MINERALIZATION_FACTOR * 3.0).abs() < 1e-12);
+    fn mineralization_factor_never_exceeds_the_admissible_maximum() {
+        // No real grid cell reaches this; the clamp exists so a garbled
+        // one cannot hand the plan a physically impossible rate.
+        let absurd = mineralization_factor(&climate(100.0, 1000.0, 1000.0), &IrrigationSystem::Drip).expect("climatology");
+        assert_eq!(absurd, MAX_MINERALIZATION_FACTOR);
     }
 
     #[test]
-    fn no_climate_data_means_no_efficiency_adjustment() {
-        // Absent data must never be read as a stress signal.
-        let empty = AnnualClimatology::default();
-        assert_eq!(
-            efficiency_climate_adjustment(&empty, &IrrigationSystem::Rainfed),
-            EfficiencyAdjustment::default()
-        );
-    }
+    fn a_climatology_missing_what_the_model_needs_yields_no_factor() {
+        // Absent data must fall back to the baseline, never to a number
+        // computed from a hole. An irrigated lot is the exception: it
+        // genuinely needs nothing but temperature.
+        let no_temp = AnnualClimatology { precip_mm_per_day: Some(3.0), et0_mm_per_day: Some(4.0), ..Default::default() };
+        assert!(mineralization_factor(&no_temp, &IrrigationSystem::Rainfed).is_none());
 
-    #[test]
-    fn each_climate_stressor_narrows_only_its_own_nutrient() {
-        // Heat only: 36 C in the hottest month -> N penalised, P/K untouched.
-        let hot = AnnualClimatology { max_temp_c: Some(36.0), ..Default::default() };
-        let adjustment = efficiency_climate_adjustment(&hot, &IrrigationSystem::Rainfed);
-        assert_eq!(adjustment, EfficiencyAdjustment { n_max_delta: -0.05, p_max_delta: 0.0, k_max_delta: 0.0 });
+        let no_water = AnnualClimatology { mean_temp_c: Some(20.0), ..Default::default() };
+        assert!(mineralization_factor(&no_water, &IrrigationSystem::Rainfed).is_none());
+        assert!(mineralization_factor(&no_water, &IrrigationSystem::Drip).is_some());
 
-        // Water deficit only: ET0 1500 mm/yr vs 600 mm/yr rain (ratio 2.5
-        // > 1.5) -> P penalised. Precip is well under the 2000 mm
-        // waterlogging threshold, so K stays clean.
-        let dry = AnnualClimatology {
-            precip_mm_per_day: Some(600.0 / 365.0),
-            et0_mm_per_day: Some(1500.0 / 365.0),
-            ..Default::default()
-        };
-        let adjustment = efficiency_climate_adjustment(&dry, &IrrigationSystem::Rainfed);
-        assert_eq!(adjustment, EfficiencyAdjustment { n_max_delta: 0.0, p_max_delta: -0.05, k_max_delta: 0.0 });
-
-        // Waterlogging only: 2500 mm/yr -> K penalised.
-        let wet = AnnualClimatology { precip_mm_per_day: Some(2500.0 / 365.0), ..Default::default() };
-        let adjustment = efficiency_climate_adjustment(&wet, &IrrigationSystem::Rainfed);
-        assert_eq!(adjustment, EfficiencyAdjustment { n_max_delta: 0.0, p_max_delta: 0.0, k_max_delta: -0.05 });
-    }
-
-    #[test]
-    fn water_rules_only_fire_under_rainfed() {
-        // Same soaking-wet, high-demand climatology that penalises P and K
-        // above must leave an irrigated lot alone — the deficit and the
-        // leaching are both artefacts of relying on rainfall.
-        let extreme = AnnualClimatology {
-            precip_mm_per_day: Some(2500.0 / 365.0),
-            et0_mm_per_day: Some(9000.0 / 365.0),
-            ..Default::default()
-        };
-        assert_eq!(
-            efficiency_climate_adjustment(&extreme, &IrrigationSystem::Drip),
-            EfficiencyAdjustment::default()
-        );
-    }
-
-    #[test]
-    fn pasto_climatology_triggers_no_efficiency_penalty() {
-        // The real LOT-001 grid cell: 22.59 C hottest month (< 35), ET0
-        // 1495 mm vs 1037 mm rain (ratio 1.44 < 1.5), 1037 mm (< 2000).
-        // Every signal lands below its threshold, so no rule fires.
-        let pasto = AnnualClimatology {
-            mean_temp_c: Some(13.17),
-            max_temp_c: Some(22.59),
-            min_temp_c: Some(4.42),
-            precip_mm_per_day: Some(2.84),
-            solar_mj_m2_per_day: Some(14.5),
-            et0_mm_per_day: Some(4.096),
-            ..Default::default()
-        };
-        assert_eq!(
-            efficiency_climate_adjustment(&pasto, &IrrigationSystem::Rainfed),
-            EfficiencyAdjustment::default()
-        );
+        let zero_et0 = climate(20.0, 1000.0, 0.0);
+        assert!(mineralization_factor(&zero_et0, &IrrigationSystem::Rainfed).is_none());
     }
 
     #[test]

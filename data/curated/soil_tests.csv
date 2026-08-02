@@ -10,3 +10,6 @@ LOT-002,S,10,mg_per_kg,turbidimetric,0,20
 LOT-002,Ca,3.0,cmolc_per_kg,AcONH4_1N_pH7,0,20
 LOT-002,Mg,0.8,cmolc_per_kg,AcONH4_1N_pH7,0,20
 LOT-002,Al,1.5,cmolc_per_kg,KCl_1N,0,20
+LOT-001,Zn,1.4,mg_per_kg,DTPA,0,20
+LOT-001,B,0.21,mg_per_kg,hot_water,0,20
+LOT-001,Mn,12,mg_per_kg,DTPA,0,20

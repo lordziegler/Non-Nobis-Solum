@@ -21,6 +21,23 @@ impl Language {
         }
     }
 
+    /// Stable across releases: this is what lands in `settings.toml`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::English => "en",
+            Language::Spanish => "es",
+        }
+    }
+
+    /// Anything unrecognised is English rather than an error — a settings
+    /// file is a preference, and a bad one must not stop the TUI opening.
+    pub fn from_code(code: &str) -> Self {
+        match code.trim().to_lowercase().as_str() {
+            "es" => Language::Spanish,
+            _ => Language::English,
+        }
+    }
+
     fn source(self) -> &'static str {
         match self {
             Language::English => EN,
@@ -68,6 +85,17 @@ mod tests {
         only_en.sort();
         only_es.sort();
         assert!(only_en.is_empty() && only_es.is_empty(), "bundles drifted: en-only {only_en:?}, es-only {only_es:?}");
+    }
+
+    #[test]
+    fn every_language_round_trips_through_its_settings_code() {
+        for language in [Language::English, Language::Spanish] {
+            assert_eq!(Language::from_code(language.code()), language);
+        }
+        // A settings file naming a language that no longer exists opens the
+        // TUI in English instead of refusing to open it.
+        assert_eq!(Language::from_code("kl"), Language::English);
+        assert_eq!(Language::from_code(""), Language::English);
     }
 
     #[test]

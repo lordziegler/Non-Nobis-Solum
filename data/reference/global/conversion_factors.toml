@@ -13,9 +13,25 @@ Mg = 24.305
 
 [unit_conversion]
 # Exchangeable cations reported in cmolc/kg -> mg/kg, by nutrient.
+# Each factor is (atomic mass / valence) x 10.
 "cmolc_per_kg_to_mg_per_kg.K" = 391.0
 "cmolc_per_kg_to_mg_per_kg.Ca" = 200.0
 "cmolc_per_kg_to_mg_per_kg.Mg" = 121.0
+# Al3+ and H+ are soil-acidity indicators rather than nutrients, but they
+# arrive through the same lab panel and feed the liming formulas, which
+# sum exchange sites and therefore need a charge unit.
+"cmolc_per_kg_to_mg_per_kg.Al" = 89.94
+"cmolc_per_kg_to_mg_per_kg.H" = 10.08
+
+# ...and back. Exact reciprocals of the factors above, so a value that
+# makes a round trip comes home unchanged. Needed because a lab is free to
+# report a cation in mg/kg, while the liming formulas and the cation
+# critical levels are both stated in cmolc/kg.
+"mg_per_kg_to_cmolc_per_kg.K" = 0.002557544757
+"mg_per_kg_to_cmolc_per_kg.Ca" = 0.005
+"mg_per_kg_to_cmolc_per_kg.Mg" = 0.008264462810
+"mg_per_kg_to_cmolc_per_kg.Al" = 0.01111852346
+"mg_per_kg_to_cmolc_per_kg.H" = 0.09920634921
 
 # Ionic <-> elemental form, for lab results reported as NH4/NO3 instead of N.
 "NH4_to_N" = 0.7772102368

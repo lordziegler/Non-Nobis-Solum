@@ -25,6 +25,8 @@ pub struct LotRegistration {
     pub region: String,
     pub latitude: String,
     pub longitude: String,
+    pub altitude_m: String,
+    pub area_ha: String,
     pub crop_id: String,
     pub yield_value: String,
     pub yield_unit: String,
@@ -61,21 +63,7 @@ impl RegisterLotPort for RegisterLot {
             return Err(DomainError::InvalidInput(format!("lot {field_id} already exists")));
         }
 
-        let context = FieldContext {
-            // One lot, one composite sample — what `--lot` already assumes.
-            sample_id: field_id.clone(),
-            texture: Texture::from_str(&registration.texture)?,
-            irrigation_system: IrrigationSystem::from_str(&registration.irrigation_system)?,
-            organic_matter_percent: percentage("organic_matter_percent", &registration.organic_matter_percent)?,
-            ph: bounded("ph", &registration.ph, 0.0, 14.0)?,
-            cec_cmolc_kg: positive("cec", &registration.cec_cmolc_kg)?,
-            bulk_density_kg_dm3: positive("bulk_density_kg_dm3", &registration.bulk_density_kg_dm3)?,
-            arable_depth_m: positive("arable_depth_m", &registration.arable_depth_m)?,
-            region: required("region", &registration.region)?,
-            latitude: optional_bounded("latitude", &registration.latitude, -90.0, 90.0)?,
-            longitude: optional_bounded("longitude", &registration.longitude, -180.0, 180.0)?,
-            field_id,
-        };
+        let context = parse_context(field_id, registration)?;
 
         // Optional, but half of it typed means the other half was meant:
         // dropping it silently hides the mistake until the first plan.
@@ -95,6 +83,57 @@ impl RegisterLotPort for RegisterLot {
             self.writer.save_yield_target(&context.field_id, &crop_id, &target)?;
         }
         Ok(())
+    }
+
+    fn edit_lot(&self, registration: &LotRegistration) -> Result<(), DomainError> {
+        let field_id = required("field_id", &registration.field_id)?;
+        // The mirror of `register_lot`'s duplicate check: that one refuses
+        // to write over a lot that exists, this one refuses to invent one
+        // that does not. Between them an id can never change meaning by
+        // accident.
+        self.field_context.get_context_by_field_id(&field_id)?;
+        let context = parse_context(field_id, registration)?;
+        self.writer.replace_field_context(&context)?;
+
+        // A yield goal typed into an edit is a revision of the planning
+        // row, which the reader already resolves last-row-wins — so it is
+        // an append, exactly as it is on registration. Leaving both blank
+        // edits the lot and leaves the plan alone.
+        match (registration.crop_id.trim(), registration.yield_value.trim()) {
+            ("", "") => Ok(()),
+            (crop_id, value) => {
+                let target = YieldTarget {
+                    value: positive("yield_value", value)?,
+                    unit: required("yield_unit", &registration.yield_unit)?,
+                };
+                self.writer.save_yield_target(&context.field_id, &required("crop_id", crop_id)?, &target)
+            }
+        }
+    }
+
+    fn delete_lot(&self, field_id: &str) -> Result<usize, DomainError> {
+        let field_id = required("field_id", field_id)?;
+        // Refused before anything is removed, so "no such lot" and "removed
+        // nothing" are different answers to the caller.
+        self.field_context.get_context_by_field_id(&field_id)?;
+        self.writer.delete_lot(&field_id)
+    }
+
+    fn set_yield_target(
+        &self,
+        field_id: &str,
+        crop_id: &str,
+        yield_value: &str,
+        yield_unit: &str,
+    ) -> Result<(), DomainError> {
+        let field_id = required("field_id", field_id)?;
+        // A goal only means something next to a lot that exists.
+        self.field_context.get_context_by_field_id(&field_id)?;
+        let target = YieldTarget {
+            value: positive("yield_value", yield_value)?,
+            unit: required("yield_unit", yield_unit)?,
+        };
+        self.writer.save_yield_target(&field_id, &required("crop_id", crop_id)?, &target)
     }
 
     fn add_soil_tests(&self, field_id: &str, entries: &[SoilTestEntry]) -> Result<(), DomainError> {
@@ -132,6 +171,37 @@ impl RegisterLotPort for RegisterLot {
 }
 
 // ---- validation helpers ---------------------------------------------------
+
+/// Raw text in, a validated [`FieldContext`] out.
+///
+/// Shared by `register_lot` and `edit_lot` deliberately: two copies of
+/// these bounds would drift, and the second copy is always the one that
+/// forgets a check. An edit is held to exactly the same standard as a
+/// registration.
+fn parse_context(field_id: String, registration: &LotRegistration) -> Result<FieldContext, DomainError> {
+    Ok(FieldContext {
+        // One lot, one composite sample — what `--lot` already assumes.
+        sample_id: field_id.clone(),
+        texture: Texture::from_str(&registration.texture)?,
+        irrigation_system: IrrigationSystem::from_str(&registration.irrigation_system)?,
+        organic_matter_percent: percentage("organic_matter_percent", &registration.organic_matter_percent)?,
+        ph: bounded("ph", &registration.ph, 0.0, 14.0)?,
+        cec_cmolc_kg: positive("cec", &registration.cec_cmolc_kg)?,
+        bulk_density_kg_dm3: positive("bulk_density_kg_dm3", &registration.bulk_density_kg_dm3)?,
+        arable_depth_m: positive("arable_depth_m", &registration.arable_depth_m)?,
+        region: required("region", &registration.region)?,
+        latitude: optional_bounded("latitude", &registration.latitude, -90.0, 90.0)?,
+        longitude: optional_bounded("longitude", &registration.longitude, -180.0, 180.0)?,
+        // The Dead Sea shore to above Everest: wide on purpose, since the
+        // only thing being caught here is a decimal in the wrong place or a
+        // value typed in feet.
+        altitude_m: optional_bounded("altitude_m", &registration.altitude_m, -430.0, 8850.0)?,
+        // Upper bound is a sanity check, not a limit: 100 000 ha is larger
+        // than any single managed field and catches a value typed in m2.
+        area_ha: optional_bounded("area_ha", &registration.area_ha, 0.0001, 100_000.0)?,
+        field_id,
+    })
+}
 
 fn required(field: &str, value: &str) -> Result<String, DomainError> {
     let value = value.trim();
@@ -206,6 +276,8 @@ mod tests {
                 region: "global".to_string(),
                 latitude: None,
                 longitude: None,
+                altitude_m: None,
+                area_ha: Some(12.0),
             })
         }
 
@@ -219,6 +291,8 @@ mod tests {
         contexts: RefCell<Vec<FieldContext>>,
         tests: RefCell<Vec<SoilTest>>,
         targets: RefCell<Vec<(String, String, YieldTarget)>>,
+        replaced: RefCell<Vec<FieldContext>>,
+        deleted: RefCell<Vec<String>>,
     }
 
     impl CuratedDataWriter for SpyWriter {
@@ -237,6 +311,16 @@ mod tests {
                 .borrow_mut()
                 .push((field_id.to_string(), crop_id.to_string(), target.clone()));
             Ok(())
+        }
+
+        fn replace_field_context(&self, context: &FieldContext) -> Result<(), DomainError> {
+            self.replaced.borrow_mut().push(context.clone());
+            Ok(())
+        }
+
+        fn delete_lot(&self, field_id: &str) -> Result<usize, DomainError> {
+            self.deleted.borrow_mut().push(field_id.to_string());
+            Ok(3)
         }
     }
 
@@ -268,10 +352,85 @@ mod tests {
         fn save_yield_target(&self, field_id: &str, crop_id: &str, target: &YieldTarget) -> Result<(), DomainError> {
             (**self).save_yield_target(field_id, crop_id, target)
         }
+
+        fn replace_field_context(&self, context: &FieldContext) -> Result<(), DomainError> {
+            (**self).replace_field_context(context)
+        }
+
+        fn delete_lot(&self, field_id: &str) -> Result<usize, DomainError> {
+            (**self).delete_lot(field_id)
+        }
     }
 
     fn use_case(spy: &Rc<SpyWriter>) -> RegisterLot {
         RegisterLot::new(Box::new(OneLotRepo), Box::new(Rc::clone(spy)))
+    }
+
+    /// The two writes are mirror images: register refuses an id that
+    /// exists, edit refuses one that does not. Between them an id can never
+    /// change meaning by accident.
+    #[test]
+    fn register_and_edit_disagree_about_which_ids_they_accept() {
+        let spy = Rc::new(SpyWriter::default());
+        let existing = LotRegistration { field_id: "LOT-EXISTING".to_string(), ..valid() };
+
+        assert!(use_case(&spy).register_lot(&existing).is_err(), "LOT-EXISTING already exists");
+        assert!(use_case(&spy).edit_lot(&existing).is_ok(), "and that is exactly what makes it editable");
+        assert!(use_case(&spy).edit_lot(&valid()).is_err(), "LOT-003 does not exist yet");
+        assert!(use_case(&spy).register_lot(&valid()).is_ok());
+
+        assert_eq!(spy.replaced.borrow().len(), 1);
+        assert_eq!(spy.replaced.borrow()[0].field_id, "LOT-EXISTING");
+    }
+
+    /// An edit is not a lesser kind of write: the same bounds apply.
+    #[test]
+    fn an_edit_is_validated_exactly_like_a_registration() {
+        let spy = Rc::new(SpyWriter::default());
+        let bad = |mutate: fn(&mut LotRegistration)| {
+            let mut registration = LotRegistration { field_id: "LOT-EXISTING".to_string(), ..valid() };
+            mutate(&mut registration);
+            registration
+        };
+
+        assert!(use_case(&spy).edit_lot(&bad(|r| r.ph = "15".to_string())).is_err(), "pH out of range");
+        assert!(use_case(&spy).edit_lot(&bad(|r| r.texture = "granite".to_string())).is_err(), "not a texture");
+        assert!(use_case(&spy).edit_lot(&bad(|r| r.arable_depth_m = "-1".to_string())).is_err(), "negative depth");
+        assert!(use_case(&spy).edit_lot(&bad(|r| r.region = String::new())).is_err(), "region is required");
+        assert!(use_case(&spy).edit_lot(&bad(|r| r.latitude = "91".to_string())).is_err(), "off the globe");
+        assert!(spy.replaced.borrow().is_empty(), "nothing may reach the writer");
+    }
+
+    #[test]
+    fn deleting_checks_the_lot_exists_before_removing_anything() {
+        let spy = Rc::new(SpyWriter::default());
+        assert!(use_case(&spy).delete_lot("LOT-404").is_err(), "no such lot");
+        assert!(use_case(&spy).delete_lot("").is_err(), "an empty id is not a lot");
+        assert!(spy.deleted.borrow().is_empty());
+
+        assert_eq!(use_case(&spy).delete_lot("LOT-EXISTING").expect("delete"), 3);
+        assert_eq!(spy.deleted.borrow().as_slice(), ["LOT-EXISTING"]);
+    }
+
+    /// A yield goal in an edit revises the planning row; leaving it blank
+    /// edits the lot and leaves the plan alone.
+    #[test]
+    fn an_edit_only_touches_the_planning_row_when_one_is_typed() {
+        let spy = Rc::new(SpyWriter::default());
+        let base = LotRegistration { field_id: "LOT-EXISTING".to_string(), ..valid() };
+
+        use_case(&spy).edit_lot(&base).expect("edit");
+        assert!(spy.targets.borrow().is_empty());
+
+        let with_goal = LotRegistration {
+            crop_id: "corn".to_string(),
+            yield_value: "11".to_string(),
+            yield_unit: "t_ha".to_string(),
+            ..base
+        };
+        use_case(&spy).edit_lot(&with_goal).expect("edit");
+        assert_eq!(spy.targets.borrow().len(), 1);
+        assert_eq!(spy.targets.borrow()[0].2.value, 11.0);
     }
 
     fn register(registration: &LotRegistration) -> Result<(), DomainError> {

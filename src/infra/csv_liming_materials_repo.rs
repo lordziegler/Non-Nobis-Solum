@@ -16,6 +16,13 @@ struct LimingMaterialRow {
     cao_pct: f64,
     mgo_pct: f64,
     granulometric_efficiency_pct: f64,
+    /// Both empty for a material meant to be applied on its own.
+    #[serde(default)]
+    mixture_id: Option<String>,
+    #[serde(default)]
+    mixture_share_pct: Option<f64>,
+    #[serde(default)]
+    source: Option<String>,
     restrictions: Option<String>,
 }
 
@@ -49,6 +56,9 @@ impl LimingMaterialRepository for CsvLimingMaterialsRepo {
                 cao_pct: row.cao_pct,
                 mgo_pct: row.mgo_pct,
                 granulometric_efficiency_pct: row.granulometric_efficiency_pct,
+                mixture_id: row.mixture_id.filter(|s| !s.is_empty()),
+                mixture_share_pct: row.mixture_share_pct,
+                source: row.source.unwrap_or_default(),
                 restrictions,
             });
         }

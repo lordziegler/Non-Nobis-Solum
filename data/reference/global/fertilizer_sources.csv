@@ -1,19 +1,19 @@
-source_id,name,nutrient_id,pct,density_kg_l,restrictions
-urea,Urea,N,46,,avoid surface application without incorporation
-ammonium_nitrate,Ammonium nitrate,N,34,,controlled storage - oxidizer hazard
-uan32,UAN 32 (liquid),N,32,1.32,requires injection or fertigation equipment
-sft,Triple superphosphate (TSP),P,20,,
-sfs,Single superphosphate (SSP),P,8,,
-sfs,Single superphosphate (SSP),S,12,,
-dap,Diammonium phosphate (DAP),N,18,,
-dap,Diammonium phosphate (DAP),P,20,,
-kcl,Muriate of potash (KCl),K,50,,avoid on chloride-sensitive crops
-k2so4,Sulfate of potash (SOP),K,42,,
-k2so4,Sulfate of potash (SOP),S,17,,
-gypsum,Agricultural gypsum (CaSO4),Ca,20,,
-gypsum,Agricultural gypsum (CaSO4),S,17,,
-ammonium_sulfate,Ammonium sulfate,N,21,,
-ammonium_sulfate,Ammonium sulfate,S,24,,
-ag_lime,Agricultural lime (CaCO3),Ca,40,,do not mix with ammonium fertilizers
-dolomitic_lime,Dolomitic lime,Ca,20,,do not mix with ammonium fertilizers
-dolomitic_lime,Dolomitic lime,Mg,12,,do not mix with ammonium fertilizers
+source_id,name,nutrient_id,pct,density_kg_l,form,restrictions
+urea,Urea,N,46,,amide,avoid surface application without incorporation
+ammonium_nitrate,Ammonium nitrate,N,34,,nitrate,controlled storage - oxidizer hazard
+uan32,UAN 32 (liquid),N,32,1.32,,requires injection or fertigation equipment
+sft,Triple superphosphate (TSP),P,20,,,
+sfs,Single superphosphate (SSP),P,8,,,
+sfs,Single superphosphate (SSP),S,12,,,
+dap,Diammonium phosphate (DAP),N,18,,,
+dap,Diammonium phosphate (DAP),P,20,,,
+kcl,Muriate of potash (KCl),K,50,,,avoid on chloride-sensitive crops
+k2so4,Sulfate of potash (SOP),K,42,,sulfate,
+k2so4,Sulfate of potash (SOP),S,17,,sulfate,
+gypsum,Agricultural gypsum (CaSO4),Ca,20,,,
+gypsum,Agricultural gypsum (CaSO4),S,17,,,
+ammonium_sulfate,Ammonium sulfate,N,21,,sulfate,
+ammonium_sulfate,Ammonium sulfate,S,24,,sulfate,
+ag_lime,Agricultural lime (CaCO3),Ca,40,,,do not mix with ammonium fertilizers
+dolomitic_lime,Dolomitic lime,Ca,20,,,do not mix with ammonium fertilizers
+dolomitic_lime,Dolomitic lime,Mg,12,,,do not mix with ammonium fertilizers

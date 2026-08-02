@@ -1,4 +1,4 @@
-source_id,name,cao_pct,mgo_pct,granulometric_efficiency_pct,restrictions
-ag_lime_caco3,Agricultural lime (CaCO3),50,2,80,illustrative composition (source=illustrative_estimate); not lab-verified; replace with real assay before field use
-dolomitic_lime,Dolomitic lime,30,18,90,illustrative composition (source=illustrative_estimate); not lab-verified; replace with real assay before field use
-quicklime_cao,Quicklime (CaO),90,2,95,illustrative composition (source=illustrative_estimate); fast-reacting; do not mix directly with ammonium fertilizers
+source_id,name,cao_pct,mgo_pct,granulometric_efficiency_pct,mixture_id,mixture_share_pct,source,restrictions
+hydrated_lime,Hydrated lime (80% Ca(OH)2),60.55,0,100,castro_gomez_integrated,40,Castro_Gomez_2009_tabla12_nota,"cao_pct is the CaO equivalent of 80% Ca(OH)2 (x 56.077/74.093); fast-reacting, do not mix directly with ammonium fertilizers"
+dolomitic_lime,Dolomitic lime (55% CaCO3 + 33% MgCO3),30.82,15.78,100,castro_gomez_integrated,45,Castro_Gomez_2009_tabla12_nota,"oxide equivalents of the carbonates (CaCO3 x 56.077/100.087; MgCO3 x 40.304/84.314); the magnesium carrier of the combination"
+paz_del_rio,Paz del Rio slag amendment (48% CaO + 1.2% MgO + 10% P2O5),48,1.2,100,castro_gomez_integrated,15,Castro_Gomez_2009_tabla12_nota,"also supplies 10% P2O5, which this schema does not model - that phosphorus is NOT counted anywhere in the fertility plan and arrives on top of it"

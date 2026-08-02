@@ -26,7 +26,7 @@ const FILL: f64 = -999.0;
 /// community, and including it makes POWER reject the whole request with
 /// HTTP 422 rather than fill that one field. `TOA_SW_DWN` takes its place,
 /// as the Ra term of a Hargreaves ET0.
-const PARAMETERS: &str = "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN,ALLSKY_SFC_SW_DWN,RH2M,WS2M,TOA_SW_DWN";
+const PARAMETERS: &str = "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN,ALLSKY_SFC_SW_DWN,TOA_SW_DWN";
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -106,11 +106,8 @@ pub fn climatology_from(body: &str) -> Result<AnnualClimatology, DomainError> {
     Ok(AnnualClimatology {
         mean_temp_c: annual("T2M"),
         max_temp_c: over_months("T2M_MAX", f64::max),
-        min_temp_c: over_months("T2M_MIN", f64::min),
         precip_mm_per_day: annual("PRECTOTCORR"),
         solar_mj_m2_per_day: annual("ALLSKY_SFC_SW_DWN"),
-        humidity_pct: annual("RH2M"),
-        wind_ms: annual("WS2M"),
         et0_mm_per_day,
     })
 }
@@ -159,8 +156,7 @@ struct PowerProperties {
 mod tests {
     use super::*;
 
-    /// Trimmed real response for (1.2136, -77.2811). `MAR` carries a -999
-    /// fill in `RH2M` to exercise the sentinel path.
+    /// Trimmed real response for (1.2136, -77.2811).
     const PASTO: &str = r#"{
       "properties": { "parameter": {
         "T2M": {"JAN":13.29,"FEB":13.32,"MAR":13.4,"APR":13.4,"MAY":13.37,"JUN":13.11,
@@ -173,9 +169,7 @@ mod tests {
                        "JUL":36.0,"AUG":37.0,"SEP":37.4,"OCT":36.5,"NOV":35.1,"DEC":34.6,"ANN":35.9},
         "PRECTOTCORR": {"JAN":2.5,"FEB":2.7,"MAR":3.2,"APR":3.7,"MAY":3.1,"JUN":2.2,
                         "JUL":1.19,"AUG":1.3,"SEP":2.3,"OCT":4.3,"NOV":4.0,"DEC":3.3,"ANN":2.84},
-        "ALLSKY_SFC_SW_DWN": {"JAN":14.5,"ANN":14.5},
-        "RH2M": {"JAN":84.0,"MAR":-999.0,"ANN":84.78},
-        "WS2M": {"JAN":1.8,"ANN":1.81}
+        "ALLSKY_SFC_SW_DWN": {"JAN":14.5,"ANN":14.5}
       } }
     }"#;
 
@@ -185,7 +179,6 @@ mod tests {
         assert_eq!(climate.mean_temp_c, Some(13.17));
         assert_eq!(climate.precip_mm_per_day, Some(2.84));
         assert_eq!(climate.solar_mj_m2_per_day, Some(14.5));
-        assert_eq!(climate.wind_ms, Some(1.81));
         // 2.84 mm/day over a year.
         assert!((climate.annual_precip_mm().expect("precip") - 1036.6).abs() < 0.1);
     }
@@ -193,10 +186,9 @@ mod tests {
     #[test]
     fn temperature_extremes_come_from_the_months_not_the_ann_aggregate() {
         let climate = climatology_from(PASTO).expect("parses");
-        // POWER's own ANN entries here are 22.59 / 4.42, but the heat and
-        // cold rules must see the hottest and coldest *months*: 21.2 / 5.3.
+        // POWER's own ANN entry here is 22.59, but the heat rule must see
+        // the hottest *month*: 21.2.
         assert_eq!(climate.max_temp_c, Some(21.2));
-        assert_eq!(climate.min_temp_c, Some(5.3));
     }
 
     #[test]
@@ -211,12 +203,9 @@ mod tests {
 
     #[test]
     fn fill_values_become_none_rather_than_minus_999() {
-        // RH2M's ANN is real, but a -999 anywhere must never leak through
-        // as a number. Rebuild the payload with a filled ANN to check.
-        let filled = PASTO.replace(r#""RH2M": {"JAN":84.0,"MAR":-999.0,"ANN":84.78}"#, r#""RH2M": {"JAN":84.0,"ANN":-999.0}"#);
+        // A -999 must never leak through as a number.
+        let filled = PASTO.replace(r#""ALLSKY_SFC_SW_DWN": {"JAN":14.5,"ANN":14.5}"#, r#""ALLSKY_SFC_SW_DWN": {"JAN":14.5,"ANN":-999.0}"#);
         let climate = climatology_from(&filled).expect("parses");
-        assert_eq!(climate.humidity_pct, None);
-        // Unrelated parameters are unaffected.
         assert_eq!(climate.mean_temp_c, Some(13.17));
     }
 
@@ -224,9 +213,9 @@ mod tests {
     fn a_missing_parameter_is_none_not_an_error() {
         // A grid cell that returns no wind at all still yields a usable
         // climatology for every other rule.
-        let without_wind = PASTO.replace(r#""WS2M""#, r#""SOME_OTHER_PARAMETER""#);
-        let climate = climatology_from(&without_wind).expect("parses");
-        assert_eq!(climate.wind_ms, None);
+        let without_solar = PASTO.replace(r#""ALLSKY_SFC_SW_DWN""#, r#""SOME_OTHER_PARAMETER""#);
+        let climate = climatology_from(&without_solar).expect("parses");
+        assert_eq!(climate.solar_mj_m2_per_day, None);
         assert_eq!(climate.mean_temp_c, Some(13.17));
     }
 

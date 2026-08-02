@@ -1,0 +1,397 @@
+# Andean/Colombian efficiency bands.
+#
+# Derived from `global`, with the differences a volcanic-ash highland
+# catalog justifies and NOTHING else. Every row that is identical to
+# `global`'s is identical on purpose: inventing a regional coefficient to
+# make the file look local is the failure mode this project has already
+# corrected once, in the efficiency ranges.
+#
+# WHAT DIFFERS FROM `global`, AND WHY
+#
+# 1. `acid_ph_already_priced` is unchanged at 5.5.
+# 2. The phosphorus **floor** drops from 0.05 to 0.03. Andean soils derived
+#    from volcanic ash carry allophane and amorphous Al/Fe oxides that fix
+#    phosphate far harder than the temperate soils behind the FAO envelope;
+#    first-season P recovery in the low single digits is documented for
+#    them. Source is tagged as regional and pending local field data.
+# 3. The strongly-acid phosphorus band tightens from 0.70 to 0.62 for the
+#    same reason: the pH effect and the ash mineralogy compound.
+# 4. Everything else is `global`'s row, unchanged.
+#
+# See `data/reference/global/efficiency_bands.toml` for the full reading
+# guide, the group table, and the bibliography. This file follows it exactly.
+
+acid_ph_already_priced = 5.5
+
+# ---- floors --------------------------------------------------------------
+# The lowest efficiency this model will claim, however many conditions stack
+# against a site. The bottom of the observed envelope, not zero: a crop on a
+# bad site still recovers something, and an efficiency driven toward zero
+# drives the dose toward infinity.
+[[floor]]
+nutrient = "N"
+efficiency_floor = 0.15
+source = "Ladha_et_al_2005"
+
+[[floor]]
+nutrient = "P"
+efficiency_floor = 0.03
+source = "regional_volcanic_ash_fixation_pending_local_trial"
+
+[[floor]]
+nutrient = "K"
+efficiency_floor = 0.25
+source = "agronomist_working_figure_pending_field_trial"
+
+[[floor]]
+nutrient = "S"
+efficiency_floor = 0.05
+source = "agronomist_working_figure_pending_field_trial"
+
+[[floor]]
+nutrient = "Ca"
+efficiency_floor = 0.25
+source = "agronomist_working_figure_pending_field_trial"
+
+[[floor]]
+nutrient = "Mg"
+efficiency_floor = 0.25
+source = "agronomist_working_figure_pending_field_trial"
+
+# ---- pH ------------------------------------------------------------------
+# Phosphorus is the nutrient pH moves most, and it moves it in BOTH
+# directions: Al/Fe phosphates below ~5.5, Ca phosphates above ~7.5, maximum
+# availability in a band around 6.0-7.0 which carries no row at all.
+[[band]]
+group = "ph"
+nutrient = "P"
+max = 5.0
+factor = 0.62
+effect = "fixed as Al and Fe phosphates, and by allophane in an ash-derived soil"
+basis = "Havlin et al. 2014 + regional adjustment, pending local trial"
+
+[[band]]
+group = "ph"
+nutrient = "P"
+min = 5.0
+max = 5.5
+factor = 0.80
+effect = "partly fixed as Al and Fe phosphates"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "P"
+min = 5.5
+max = 6.0
+factor = 0.92
+effect = "slightly below the pH band of maximum availability"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "P"
+min = 7.0
+max = 7.5
+factor = 0.90
+effect = "beginning to precipitate as Ca phosphates"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "P"
+min = 7.5
+factor = 0.75
+effect = "precipitated as Ca phosphates in a calcareous soil"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "N"
+max = 5.0
+factor = 0.95
+effect = "nitrification slowed in strongly acid soil"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "N"
+min = 7.0
+max = 7.5
+factor = 0.95
+effect = "ammonia volatilization from urea and ammonium sources begins"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "N"
+min = 7.5
+factor = 0.88
+effect = "ammonia volatilization from urea and ammonium sources in alkaline soil"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "ph"
+nutrient = "S"
+max = 5.5
+factor = 0.90
+effect = "sulfate adsorbed by Fe and Al oxides in acid soil"
+basis = "Havlin et al. 2014"
+
+# Potassium carries NO pH row on purpose. Exchangeable K availability is not
+# a strong function of pH; what hurts K on acid soils is Al occupying the
+# exchange sites, and that is priced once, under `acidity`.
+
+# ---- texture -------------------------------------------------------------
+# Medium textures are the reference the base ranges were written for and
+# carry no row. Phosphorus carries none either: what fixes P is Fe/Al oxide
+# chemistry and pH, both already priced above.
+[[band]]
+group = "texture"
+nutrient = "N"
+class = "coarse"
+factor = 0.85
+effect = "nitrate leached below the root zone in a coarse soil"
+basis = "Cameron et al. 2013"
+
+[[band]]
+group = "texture"
+nutrient = "N"
+class = "fine"
+factor = 0.92
+effect = "denitrification where a heavy soil aerates poorly"
+basis = "Cameron et al. 2013"
+
+[[band]]
+group = "texture"
+nutrient = "S"
+class = "coarse"
+factor = 0.85
+effect = "sulfate leached below the root zone, as nitrate is"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "texture"
+nutrient = "K"
+class = "coarse"
+factor = 0.90
+effect = "little exchange capacity to hold K against leaching"
+basis = "Havlin et al. 2014"
+
+# Ca and Mg are exchangeable bases held by the same sites as K, so the same
+# sentence of the same source covers them. This is the ONLY place either has
+# a rule: nothing in the cited literature supports a pH, water, temperature
+# or aluminium coefficient specific to them that is not already an artefact
+# of the liming calculation, and a number invented to fill the table would
+# look like knowledge. A profile with local data adds rows here.
+[[band]]
+group = "texture"
+nutrient = "Ca"
+class = "coarse"
+factor = 0.90
+effect = "little exchange capacity to hold Ca against leaching"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "texture"
+nutrient = "Mg"
+class = "coarse"
+factor = 0.90
+effect = "little exchange capacity to hold Mg against leaching"
+basis = "Havlin et al. 2014"
+
+# ---- water ---------------------------------------------------------------
+# Driving variable is annual rainfall over annual reference ET.
+# The deficit rows are `class = "rainfed"`: an irrigated lot has no water
+# deficit by definition, which is the point of irrigating. Irrigation earns
+# no bonus row — controlled water removes a penalty, it does not make a crop
+# recover more than its base range says.
+[[band]]
+group = "water"
+nutrient = "P"
+class = "rainfed"
+max = 0.75
+factor = 0.80
+effect = "diffusion to the root slowed by a dry soil"
+basis = "Barber 1995"
+
+[[band]]
+group = "water"
+nutrient = "N"
+class = "rainfed"
+max = 0.75
+factor = 0.95
+effect = "mass flow to the root reduced by a dry soil"
+basis = "Barber 1995"
+
+[[band]]
+group = "water"
+nutrient = "K"
+class = "rainfed"
+max = 0.75
+factor = 0.95
+effect = "mass flow to the root reduced by a dry soil"
+basis = "Barber 1995"
+
+# Excess water is a site fact, so these fire irrigated or not.
+[[band]]
+group = "water"
+nutrient = "N"
+class = "any"
+min = 1.5
+factor = 0.85
+effect = "denitrification in a periodically saturated soil"
+basis = "Cameron et al. 2013"
+
+[[band]]
+group = "water"
+nutrient = "S"
+class = "any"
+min = 1.5
+factor = 0.88
+effect = "sulfate leached and reduced under excess water"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "water"
+nutrient = "K"
+class = "any"
+min = 1.5
+factor = 0.92
+effect = "K leached under sustained excess rainfall"
+basis = "Havlin et al. 2014"
+
+# ---- temperature ---------------------------------------------------------
+# The hot rule is keyed to the hottest MONTH, not the annual mean: the loss
+# happens in that window however mild the rest of the year is. Temperature is
+# charged once — `temperature_max` is consulted first and a hit there stops
+# `temperature_mean` from also firing.
+[[band]]
+group = "temperature_max"
+nutrient = "N"
+min = 35.0
+factor = 0.90
+effect = "ammonia volatilization from surface-applied urea accelerates"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "temperature_mean"
+nutrient = "N"
+max = 10.0
+factor = 0.85
+effect = "mineralization and uptake strongly slowed by cold"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "temperature_mean"
+nutrient = "N"
+min = 10.0
+max = 15.0
+factor = 0.92
+effect = "mineralization and uptake slowed by cold"
+basis = "Havlin et al. 2014"
+
+[[band]]
+group = "temperature_mean"
+nutrient = "P"
+max = 10.0
+factor = 0.90
+effect = "root growth and P uptake slowed by cold"
+basis = "Havlin et al. 2014"
+
+# Sulfur carries no `temperature_mean` row on purpose: temperature reaches
+# sulfur through the oxidation of elemental S, which is a property of the
+# product and is priced once, under `source_form`.
+
+# ---- acidity / exchangeable aluminium ------------------------------------
+# Driving variable is Al as a percent of effective CEC (CICE). Above ~30% the
+# literature treats a soil as toxic to most crops; 15-30% already hurts
+# sensitive ones. See `acid_ph_already_priced` for the double-count guard.
+[[band]]
+group = "acidity"
+nutrient = "P"
+min = 30.0
+factor = 0.85
+effect = "root elongation inhibited by exchangeable Al, so less soil is explored"
+basis = "Kochian et al. 2005"
+
+[[band]]
+group = "acidity"
+nutrient = "P"
+min = 15.0
+max = 30.0
+factor = 0.92
+effect = "root elongation inhibited by exchangeable Al, so less soil is explored"
+basis = "Kochian et al. 2005"
+
+[[band]]
+group = "acidity"
+nutrient = "N"
+min = 30.0
+factor = 0.92
+effect = "root elongation inhibited by exchangeable Al, so less soil is explored"
+basis = "Kochian et al. 2005"
+
+[[band]]
+group = "acidity"
+nutrient = "N"
+min = 15.0
+max = 30.0
+factor = 0.97
+effect = "root elongation inhibited by exchangeable Al, so less soil is explored"
+basis = "Kochian et al. 2005"
+
+[[band]]
+group = "acidity"
+nutrient = "K"
+min = 30.0
+factor = 0.92
+effect = "Al occupies the exchange sites K would be held on"
+basis = "Kochian et al. 2005"
+
+# ---- source form ---------------------------------------------------------
+# Elemental sulfur is not a fertilizer until soil bacteria oxidize it to
+# sulfate, and that oxidation is temperature-driven. Sulfate sources are
+# available on contact and carry no row at all.
+#
+# Particle size is the third control Germida & Janzen name, and the catalog
+# records none. The bands below are set for a conventional agricultural
+# granule — the conservative case — and the assumption is reported.
+[[band]]
+group = "source_form"
+nutrient = "S"
+class = "elemental"
+max = 15.0
+factor = 0.60
+effect = "must be microbially oxidized to sulfate before the crop can use it"
+basis = "Germida & Janzen 1993"
+
+[[band]]
+group = "source_form"
+nutrient = "S"
+class = "elemental"
+min = 15.0
+max = 20.0
+factor = 0.75
+effect = "must be microbially oxidized to sulfate before the crop can use it"
+basis = "Germida & Janzen 1993"
+
+[[band]]
+group = "source_form"
+nutrient = "S"
+class = "elemental"
+min = 20.0
+factor = 0.90
+effect = "must be microbially oxidized to sulfate before the crop can use it"
+basis = "Germida & Janzen 1993"
+
+# No range at all: the row that fires when the lot has no climatology. The
+# conservative middle band rather than the best case, since assuming warmth
+# would under-dose a cold site.
+[[band]]
+group = "source_form"
+nutrient = "S"
+class = "elemental"
+factor = 0.75
+effect = "must be microbially oxidized to sulfate, and this lot has no temperature on file"
+basis = "Germida & Janzen 1993"

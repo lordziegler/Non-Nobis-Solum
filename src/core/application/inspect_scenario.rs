@@ -1,9 +1,18 @@
 use super::scenario::FertilityScenario;
-use crate::core::domain::{CriticalLevel, DomainError, FieldContext, Nutrient, RemovalReference, SoilTest, YieldTarget};
-use crate::core::ports::{
-    CriticalLevelsRepository, EfficiencyRulesRepository, FieldContextRepository, InspectScenarioPort,
-    NutrientRemovalRepository, SoilTestRepository, YieldTargetRepository,
+use crate::core::domain::{
+    services, CriticalLevel, DomainError, FieldContext, Nutrient, PropertyAssessment, RemovalReference,
+    SoilQualityAssessment, SoilTest, YieldTarget,
 };
+use crate::core::ports::{
+    ConversionFactorsRepository, CriticalLevelsRepository, EfficiencyRulesRepository, FieldContextRepository,
+    InspectScenarioPort, NutrientRemovalRepository, SoilQualityThresholdsRepository, SoilTestRepository,
+    YieldTargetRepository,
+};
+
+/// Charge-equivalent unit the cation ratios and the acidity diagnosis are
+/// both stated in. Ratios of mg/kg values have the same shape and
+/// different numbers, which is the worst kind of wrong.
+const CMOLC_PER_KG: &str = "cmolc_per_kg";
 
 /// Where each number used in the plan comes from.
 #[derive(Debug, Clone)]
@@ -21,6 +30,10 @@ pub struct ScenarioInspection {
     pub soil_tests: Vec<SoilTest>,
     pub yield_target: YieldTarget,
     pub provenance: Vec<NutrientProvenance>,
+    /// What the analysis *means*: pH class, organic matter against its
+    /// thermal belt, salinity, CEC, the acidity diagnosis and the cation
+    /// balance. None of it feeds a dose.
+    pub soil_quality: SoilQualityAssessment,
 }
 
 pub struct InspectScenario {
@@ -30,9 +43,12 @@ pub struct InspectScenario {
     nutrient_removal: Box<dyn NutrientRemovalRepository>,
     efficiency_rules: Box<dyn EfficiencyRulesRepository>,
     critical_levels: Box<dyn CriticalLevelsRepository>,
+    conversion_factors: Box<dyn ConversionFactorsRepository>,
+    soil_quality: Box<dyn SoilQualityThresholdsRepository>,
 }
 
 impl InspectScenario {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         soil_tests: Box<dyn SoilTestRepository>,
         field_context: Box<dyn FieldContextRepository>,
@@ -40,6 +56,8 @@ impl InspectScenario {
         nutrient_removal: Box<dyn NutrientRemovalRepository>,
         efficiency_rules: Box<dyn EfficiencyRulesRepository>,
         critical_levels: Box<dyn CriticalLevelsRepository>,
+        conversion_factors: Box<dyn ConversionFactorsRepository>,
+        soil_quality: Box<dyn SoilQualityThresholdsRepository>,
     ) -> Self {
         Self {
             soil_tests,
@@ -48,7 +66,91 @@ impl InspectScenario {
             nutrient_removal,
             efficiency_rules,
             critical_levels,
+            conversion_factors,
+            soil_quality,
         }
+    }
+
+    /// One reading judged against its interpretation table. A property
+    /// whose table is missing comes back with `category: None` rather than
+    /// failing: nothing here is required to plan.
+    fn assess(&self, property: &str, zone: &str, value: f64, unit: &str) -> PropertyAssessment {
+        let band = self
+            .soil_quality
+            .bands(property, zone)
+            .ok()
+            .and_then(|bands| services::classify_band(&bands, value).cloned());
+        PropertyAssessment {
+            property: property.to_string(),
+            value,
+            unit: unit.to_string(),
+            category: band.as_ref().map(|b| b.category.clone()),
+            source: band.map(|b| format!("{} ({})", b.source, b.year)),
+        }
+    }
+
+    /// The whole qualitative reading of a soil analysis.
+    ///
+    /// Every step degrades rather than fails. An unconvertible cation
+    /// leaves the ratios that need it out; a lot with no altitude and no
+    /// climatology leaves organic matter uninterpreted. Saying nothing is
+    /// honest; classifying off a unit nobody checked is not.
+    fn assess_soil_quality(&self, context: &FieldContext, tests: &[SoilTest]) -> SoilQualityAssessment {
+        let zone = context.climate_zone(None);
+        let zone_key = zone.map_or_else(|| "any".to_string(), |z| z.to_string());
+
+        let mut properties = vec![
+            self.assess("ph", &zone_key, context.ph, "ph"),
+            self.assess("cec", &zone_key, context.cec_cmolc_kg, CMOLC_PER_KG),
+        ];
+        // Only offered when a belt is known: the same 3% is high in the
+        // lowlands and very low above 2000 m, so the unkeyed answer would
+        // be a coin flip dressed as a diagnosis.
+        if zone.is_some() {
+            properties.push(self.assess("organic_matter", &zone_key, context.organic_matter_percent, "percent"));
+        }
+
+        let cmolc = |nutrient: Nutrient| -> Option<f64> {
+            let test = tests.iter().find(|t| t.nutrient == nutrient)?;
+            if test.unit == CMOLC_PER_KG {
+                return Some(test.value);
+            }
+            self.conversion_factors
+                .convert(&test.unit, CMOLC_PER_KG, nutrient.as_str(), test.value)
+                .ok()
+        };
+        let (ca, mg, k) = (cmolc(Nutrient::Ca), cmolc(Nutrient::Mg), cmolc(Nutrient::K));
+
+        if let (Some(ca), Some(mg), Some(k), Some(al)) = (ca, mg, k, cmolc(Nutrient::Al)) {
+            let h = cmolc(Nutrient::H).unwrap_or(0.0);
+            let cice = services::cation_exchange_capacity_effective(h, al, k, mg, ca);
+            properties.push(self.assess("exchangeable_aluminum", &zone_key, al, CMOLC_PER_KG));
+            properties.push(self.assess(
+                "aluminum_saturation",
+                &zone_key,
+                services::aluminum_saturation_pct(al, cice),
+                "percent",
+            ));
+            properties.push(self.assess("sum_of_bases", &zone_key, ca + mg + k, CMOLC_PER_KG));
+        }
+
+        let mut cation_ratios = Vec::new();
+        if let (Some(ca), Some(mg), Some(k)) = (ca, mg, k) {
+            let ratios = services::cation_ratios(ca, mg, k);
+            for (property, value) in [
+                ("ca_to_mg", ratios.ca_to_mg),
+                ("mg_to_k", ratios.mg_to_k),
+                ("k_to_mg", ratios.k_to_mg),
+                ("ca_to_k", ratios.ca_to_k),
+                ("ca_plus_mg_to_k", ratios.ca_plus_mg_to_k),
+            ] {
+                if let Some(value) = value {
+                    cation_ratios.push(self.assess(property, &zone_key, value, "ratio"));
+                }
+            }
+        }
+
+        SoilQualityAssessment { climate_zone: zone, properties, cation_ratios }
     }
 }
 
@@ -64,17 +166,19 @@ impl InspectScenarioPort for InspectScenario {
         let mut provenance = Vec::with_capacity(Nutrient::MACRONUTRIENTS.len());
         for nutrient in Nutrient::MACRONUTRIENTS {
             let nutrient_id = nutrient.as_str();
-            let removal_reference = self
-                .nutrient_removal
-                .describe_removal(&scenario.crop_id, &scenario.product, nutrient_id)
-                .ok();
+            let removal_reference = self.nutrient_removal.describe_removal(&scenario.crop_id, nutrient_id).ok();
             let efficiency_range = self
                 .efficiency_rules
                 .get_efficiency_range(&field_context.texture, &field_context.irrigation_system, nutrient_id)
                 .ok();
+            // Keyed on the method this sample's own reading came from, so
+            // the thresholds shown are the ones the plan actually judged
+            // it against rather than an arbitrary pick between Bray II and
+            // Olsen.
+            let method = soil_tests.iter().find(|t| t.nutrient == nutrient).map(|t| t.method.as_str());
             let critical_level = self
                 .critical_levels
-                .get_critical_level(nutrient_id, &field_context.texture, &field_context.region)
+                .get_critical_level(nutrient_id, &field_context.texture, &field_context.region, method)
                 .ok();
 
             provenance.push(NutrientProvenance {
@@ -85,11 +189,14 @@ impl InspectScenarioPort for InspectScenario {
             });
         }
 
+        let soil_quality = self.assess_soil_quality(&field_context, &soil_tests);
+
         Ok(ScenarioInspection {
             field_context,
             soil_tests,
             yield_target,
             provenance,
+            soil_quality,
         })
     }
 }

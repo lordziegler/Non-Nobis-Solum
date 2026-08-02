@@ -4,16 +4,18 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Sebastian Ziegler"]
 license = "GPL-3.0-or-later"
-# Two binaries now; keep bare `cargo run` meaning the CLI, as before.
-default-run = "non_nobis_solum"
+# Two binaries; keep bare `cargo run` meaning the CLI, as before.
+default-run = "nns"
 description = "Fertilization plan engine driven by soil analysis, crop removal coefficients, efficiency rules and fertilizer sources."
 
 [lib]
 name = "non_nobis_solum"
 path = "src/lib.rs"
 
+# Short enough to type twice. The crate keeps its full name, so
+# uninstalling is still `cargo uninstall non_nobis_solum`.
 [[bin]]
-name = "non_nobis_solum"
+name = "nns"
 path = "src/main.rs"
 
 [[bin]]
