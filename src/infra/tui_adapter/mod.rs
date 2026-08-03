@@ -102,7 +102,7 @@ pub const LOT_ACTIONS: [(&str, char, &str); 10] = [
     ("action_new", 'n', "+"),
     ("action_copy", 'c', "⧉"),
     ("action_edit", 'e', "✎"),
-    ("action_sample", 's', "⌕"),
+    ("action_sample", 'a', "⌕"),
     ("action_batch", 'b', "▤"),
     ("action_delete", 'x', "␡"),
     ("action_import", 'i', "⇥"),
@@ -159,10 +159,14 @@ const NEW_LOT_FIELDS: [&str; 16] = [
 /// file's own header.
 const IMPORT_FIELDS: [&str; 1] = ["form_import_file"];
 
-/// Offered at the end of the browser when no file on screen is the right
-/// one. Picking it turns the field into a text box, so an absolute path
-/// anywhere on disk is reachable without making everyone type one.
-const IMPORT_TYPE_A_PATH: &str = "\u{0}type-a-path";
+/// Offered at the end of a list that cannot be closed: the file browser,
+/// where the right file may be anywhere on disk, and the lab methods,
+/// where the right extraction may be one nobody here has seen. Picking it
+/// turns the field into a text box.
+///
+/// A NUL is what makes it a sentinel and not a value: no path and no
+/// method can collide with it.
+const TYPE_IT_IN: &str = "\u{0}type-it-in";
 
 /// Where the browser opens: the shipped examples if they are there, then
 /// the data root, then home. Somewhere with something in it beats an empty
@@ -245,6 +249,7 @@ const BATCH_COLUMNS: [&str; 5] = ["form_nutrient", "form_value", "form_unit", "f
 const BATCH_FIRST_CELL: usize = 1;
 const BATCH_COL_VALUE: usize = 1;
 const BATCH_COL_UNIT: usize = 2;
+const BATCH_COL_METHOD: usize = 3;
 
 /// Where a fresh row starts: the unit most lab reports use and the depth
 /// the single-reading form has always suggested. Both are one keypress to
@@ -270,13 +275,8 @@ impl SampleBatch {
         let rows = soil_test_nutrients()
             .into_iter()
             .map(|nutrient| {
-                [
-                    nutrient,
-                    String::new(),
-                    SOIL_TEST_UNITS[0].to_string(),
-                    String::new(),
-                    BATCH_DEFAULT_DEPTH_CM.to_string(),
-                ]
+                let unit = customary_unit(&nutrient).to_string();
+                [nutrient, String::new(), unit, String::new(), BATCH_DEFAULT_DEPTH_CM.to_string()]
             })
             .collect();
         Self { field_id, rows, row: 0, col: BATCH_FIRST_CELL, editing: false }
@@ -304,33 +304,32 @@ impl SampleBatch {
         self.rows.get_mut(self.row)?.get_mut(self.col)
     }
 
-    /// The unit is a closed set, so it cycles the way every other closed
-    /// set in this app does rather than opening an overlay over a table.
-    fn cycle_unit(&mut self, delta: isize) {
-        if self.col != BATCH_COL_UNIT {
-            return;
+    /// The two cells with a list behind them cycle it, rather than opening
+    /// an overlay over a table the overlay would cover.
+    ///
+    /// An empty method cell lands on the extraction that nutrient is
+    /// customarily read with — the first `l` offers it, which is one press
+    /// for the common case and still an act rather than a default.
+    fn cycle(&mut self, delta: isize) {
+        let Some(row) = self.rows.get(self.row) else { return };
+        // The method list is this row's nutrient's own; the first entry is
+        // what that nutrient is customarily read with, which is what an
+        // empty cell lands on.
+        let options: &[&str] = match self.col {
+            BATCH_COL_UNIT => &SOIL_TEST_UNITS,
+            BATCH_COL_METHOD => methods_for(&row[0]),
+            _ => return,
+        };
+        let next = match options.iter().position(|option| *option == row[self.col]) {
+            Some(current) => options[(current + if delta < 0 { options.len() - 1 } else { 1 }) % options.len()],
+            None => options[0],
         }
-        let len = SOIL_TEST_UNITS.len();
-        let current = self
-            .rows
-            .get(self.row)
-            .and_then(|row| SOIL_TEST_UNITS.iter().position(|unit| *unit == row[BATCH_COL_UNIT]))
-            .unwrap_or(0);
-        let next = (current + if delta < 0 { len - 1 } else { 1 }) % len;
+        .to_string();
         if let Some(cell) = self.cell() {
-            *cell = SOIL_TEST_UNITS[next].to_string();
+            *cell = next;
         }
     }
 
-    /// Picked or typed, decided by the cell — the same rule the forms
-    /// follow.
-    fn activate_cell(&mut self) {
-        if self.col == BATCH_COL_UNIT {
-            self.cycle_unit(1);
-        } else {
-            self.editing = true;
-        }
-    }
 
     /// Wraps within the editable columns, never onto the nutrient.
     fn move_cell(&mut self, delta: isize) {
@@ -378,6 +377,59 @@ const SOIL_TEST_UNITS: [&str; 2] = ["mg_per_kg", "cmolc_per_kg"];
 /// The region every shipped reference row answers to, whatever profile is
 /// active. Mirrors the `"any"` sentinel the reference adapters look for.
 const REGION_ANY: &str = "any";
+
+/// The extractions a lab reports **this nutrient** with, first one first.
+/// Ids short enough to live in a CSV cell, taken from a Colombian NTC
+/// panel and from the methods the shipped reference tables classify
+/// against.
+///
+/// Per nutrient and not one flat list, because a flat list offers Olsen
+/// for calcium: a phosphorus extraction on a cation is not a choice, it is
+/// a wrong answer waiting in a menu. The first entry is what a panel
+/// customarily uses — offered, never filled in, since a method is a fact
+/// about somebody's lab report and not something this app may assume.
+///
+/// Still a **list, not a closed set**: the last row hands the field back
+/// for typing, because a lab is free to report an extraction nobody here
+/// has seen. Nothing breaks when it does — `same_method` compares
+/// alphanumerics only, and a method no critical level names falls back to
+/// the row that names none.
+fn methods_for(nutrient: &str) -> &'static [&'static str] {
+    match nutrient {
+        "P" => &["Bray_II", "Olsen", "Mehlich"],        // NTC 5350
+        "K" | "Ca" | "Mg" => &["AcONH4_1N_pH7"],        // NTC 5268 / 5349
+        "Al" | "H" => &["KCl_1N"],                      // NTC 5263
+        "S" => &["turbidimetric", "Ca_H2PO4_2_0.008M"], // NTC 5402
+        "B" => &["hot_water"],                          // NTC 5404
+        // No nutrient picked yet: no list to narrow, and offering the
+        // micronutrient one would be a guess with a menu around it.
+        "" => &[],
+        _ => &["DTPA", "Mehlich"],                      // Fe, Mn, Cu, Zn · NTC 5526
+    }
+}
+
+/// The unit a lab reports a nutrient in.
+///
+/// Everything read off the exchange complex arrives as a charge — that is
+/// what `cmolcarga/kg` on a lab report means, and what the liming formulas
+/// and the cation critical levels are both stated in. The bases are the
+/// reason for this; Al and H come with them because they are read off the
+/// same complex, in the same column of the same report, and
+/// `conversion_factors.toml` carries a factor for exactly these five.
+///
+/// A suggestion, not a constraint: `h`/`l` switches it, and a lab that
+/// reports a cation in mg/kg is converted rather than refused.
+fn customary_unit(nutrient: &str) -> &'static str {
+    match nutrient {
+        "K" | "Ca" | "Mg" | "Al" | "H" => "cmolc_per_kg",
+        _ => "mg_per_kg",
+    }
+}
+
+/// That nutrient's methods plus the row that starts typing.
+fn lab_method_options(nutrient: &str) -> Vec<String> {
+    methods_for(nutrient).iter().map(|m| m.to_string()).chain([TYPE_IT_IN.to_string()]).collect()
+}
 
 /// Every nutrient except N: N availability is derived from organic matter,
 /// so offering it would accept a value the plan then ignores.
@@ -449,6 +501,18 @@ impl Form {
     fn set(&mut self, label: &str, value: String) {
         if let Some(field) = self.fields.iter_mut().find(|field| field.label == label) {
             field.value = value;
+        }
+    }
+
+    /// Replaces a field's list, dropping a value the new one does not
+    /// carry: the methods depend on the nutrient, and a method left over
+    /// from the last one is an answer to a question nobody asked.
+    fn set_options(&mut self, label: &str, options: Vec<String>) {
+        if let Some(field) = self.fields.iter_mut().find(|field| field.label == label) {
+            if !options.contains(&field.value) {
+                field.value.clear();
+            }
+            field.options = options;
         }
     }
 
@@ -1040,6 +1104,10 @@ impl Tui {
                     ("form_field_id", self.lots.iter().map(|lot| lot.field_id.clone()).collect()),
                     ("form_nutrient", soil_test_nutrients()),
                     ("form_unit", SOIL_TEST_UNITS.iter().map(|unit| unit.to_string()).collect()),
+                    // Rebuilt the moment a nutrient is picked — see
+                    // `commit_picker`. Until then the form has no nutrient
+                    // to narrow them by.
+                    ("form_method", lab_method_options("")),
                 ],
             ),
             // Region prefilled with the active profile, whose reference
@@ -1177,7 +1245,14 @@ impl Tui {
             // Opens on the field's current value, so re-opening never moves
             // the selection.
             let options = field.options.clone();
-            let labels = options.clone();
+            // The sentinel is the one row whose label is not its value.
+            let labels = options
+                .iter()
+                .map(|option| match option.as_str() {
+                    TYPE_IT_IN => self.i18n.t("picker_type_value").to_string(),
+                    value => value.to_string(),
+                })
+                .collect();
             let idx = options.iter().position(|option| *option == field.value).unwrap_or(0);
             self.picker = Some(Picker { field_idx: form.idx, options, labels, idx, title: String::new() });
         } else if let Some(form) = &mut self.form {
@@ -1189,7 +1264,7 @@ impl Tui {
     fn open_browser(&mut self, dir: &std::path::Path) {
         let Some(form) = &self.form else { return };
         let (mut options, mut labels) = browse_dir(dir);
-        options.push(IMPORT_TYPE_A_PATH.to_string());
+        options.push(TYPE_IT_IN.to_string());
         labels.push(self.i18n.t("picker_type_path").to_string());
         self.picker = Some(Picker {
             field_idx: form.idx,
@@ -1214,12 +1289,27 @@ impl Tui {
         }
         // The sentinel is not a value either — it is a request to stop
         // picking and start typing.
-        let typing = chosen == IMPORT_TYPE_A_PATH;
+        let typing = chosen == TYPE_IT_IN;
         if let Some(form) = self.form.as_mut() {
             if let Some(field) = form.fields.get_mut(picker.field_idx) {
                 field.value = if typing { String::new() } else { chosen };
             }
             form.editing = typing;
+            // Picking the nutrient answers two of the rows under it. The
+            // methods are that nutrient's own, so choosing Ca can never
+            // offer Olsen; the unit is answered for anything read off the
+            // exchange complex, but only while it is empty — after a saved
+            // reading the form carries the last unit forward, and that is
+            // the user's own answer, not a suggestion.
+            if form.screen == Screen::NewSample
+                && form.fields.get(picker.field_idx).is_some_and(|field| field.label == "form_nutrient")
+            {
+                let nutrient = form.value("form_nutrient");
+                form.set_options("form_method", lab_method_options(&nutrient));
+                if form.value("form_unit").is_empty() {
+                    form.set("form_unit", customary_unit(&nutrient).to_string());
+                }
+            }
         }
     }
 
@@ -1434,6 +1524,10 @@ impl Tui {
             KeyCode::Tab | KeyCode::BackTab if self.screen != Screen::Dashboard => {
                 self.focus_modules = !self.focus_modules
             }
+            // `s` saves what is being filled in, from anywhere on the
+            // screen filling it. The save row and the last cell still
+            // work; this is for people who would rather not walk to them.
+            KeyCode::Char('s') if self.form.is_some() => self.submit_form(),
             KeyCode::Enter => self.activate(),
             KeyCode::Esc => self.back(),
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
@@ -1481,7 +1575,7 @@ impl Tui {
             // selection, not about which pane is lit. `x` is the exception
             // and stays on the lot list, where the lot it deletes is on
             // screen under the cursor.
-            KeyCode::Char(c @ ('n' | 'c' | 'e' | 's' | 'b' | 'i' | ',')) if self.focus_modules || self.screen == Screen::Dashboard => {
+            KeyCode::Char(c @ ('n' | 'c' | 'e' | 'a' | 'b' | 'i' | ',')) if self.focus_modules || self.screen == Screen::Dashboard => {
                 self.lot_action(c)
             }
             _ => {}
@@ -1525,6 +1619,9 @@ impl Tui {
                 self.enter(Screen::Dashboard);
             }
             KeyCode::Char('?') => self.help = true,
+            // The table is written from the last cell, or from wherever
+            // the cursor happens to be.
+            KeyCode::Char('s') => self.commit_batch(),
             KeyCode::Enter if on_last_cell => self.commit_batch(),
             _ => {
                 let Some(batch) = &mut self.batch else { return };
@@ -1533,9 +1630,13 @@ impl Tui {
                     KeyCode::Char('k') | KeyCode::Up => batch.row = step(batch.row, batch.rows.len(), -1),
                     KeyCode::Tab => batch.move_cell(1),
                     KeyCode::BackTab => batch.move_cell(-1),
-                    KeyCode::Char('h') | KeyCode::Left => batch.cycle_unit(-1),
-                    KeyCode::Char('l') | KeyCode::Right => batch.cycle_unit(1),
-                    KeyCode::Enter | KeyCode::Char('e') => batch.activate_cell(),
+                    // One rule, no exceptions: `h`/`l` walks whatever list
+                    // the cell has behind it, `e` types. Both cells with a
+                    // list also accept a value it does not carry, which is
+                    // the point of `e` on a lab method.
+                    KeyCode::Char('h') | KeyCode::Left => batch.cycle(-1),
+                    KeyCode::Char('l') | KeyCode::Right => batch.cycle(1),
+                    KeyCode::Enter | KeyCode::Char('e') => batch.editing = true,
                     _ => {}
                 }
             }
@@ -1650,8 +1751,8 @@ impl Tui {
             // one and picks from the rest, but with nothing curated there
             // is nothing to prefill *or* pick from — and the field falls
             // back to free text, which is a lot id nobody can typo-check.
-            's' if self.selected_lot().is_none() => self.fail_key("err_no_lot"),
-            's' => self.open_form(Screen::NewSample),
+            'a' if self.selected_lot().is_none() => self.fail_key("err_no_lot"),
+            'a' => self.open_form(Screen::NewSample),
             'b' => self.open_batch(),
             'x' => self.delete_selected_lot(),
             'i' => self.open_form(Screen::Import),
@@ -2056,7 +2157,7 @@ mod tests {
         for (key, screen) in [
             ('n', Screen::NewLot),
             ('e', Screen::EditLot),
-            ('s', Screen::NewSample),
+            ('a', Screen::NewSample),
             ('i', Screen::Import),
             (',', Screen::Settings),
         ] {
@@ -2180,7 +2281,7 @@ mod tests {
         tui.activate_form_row();
         let picker = tui.picker.as_ref().expect("a browser");
         assert!(!picker.title.is_empty(), "the frame names the directory");
-        assert_eq!(picker.options.last().map(String::as_str), Some(IMPORT_TYPE_A_PATH));
+        assert_eq!(picker.options.last().map(String::as_str), Some(TYPE_IT_IN));
 
         // ...and the last row hands the field back for typing.
         let last = tui.picker.as_ref().expect("picker").options.len() - 1;
@@ -2268,6 +2369,21 @@ mod tests {
         field.value = value.to_string();
     }
 
+    /// Chooses a value off a field's own list, which is the only way the
+    /// app itself fills a closed set — and the only way a field that
+    /// depends on another one (the methods on the nutrient) sees it.
+    fn pick(tui: &mut Tui, label: &str, value: &str) {
+        go_to_field(tui, label);
+        press(tui, KeyCode::Enter);
+        let picker = tui.picker.as_mut().expect("a list unfolds");
+        picker.idx = picker
+            .options
+            .iter()
+            .position(|option| option == value)
+            .unwrap_or_else(|| panic!("{label} does not offer {value:?}: {:?}", picker.options));
+        tui.commit_picker();
+    }
+
     /// Moves to a field by label, the way a user would.
     fn go_to_field(tui: &mut Tui, label: &str) {
         let form = tui.form.as_ref().expect("a form is on screen");
@@ -2300,6 +2416,172 @@ mod tests {
         press(tui, KeyCode::Enter);
     }
 
+    /// `cmolcarga/kg` is one column of a lab report, spanning every reading
+    /// off the exchange complex. Picking the nutrient is enough to know
+    /// which unit its value arrives in.
+    #[test]
+    fn choosing_a_base_answers_the_unit_it_is_reported_in() {
+        let mut tui = tui();
+        tui.open(Some(Screen::NewSample));
+        assert_eq!(tui.form.as_ref().expect("form").value("form_unit"), "", "nothing is assumed before the nutrient");
+
+        pick(&mut tui, "form_nutrient", "Ca");
+        assert_eq!(tui.form.as_ref().expect("form").value("form_unit"), "cmolc_per_kg");
+
+        // The suggestion fills an empty row; it never overrules an answer
+        // already there — including the one carried from the last reading.
+        pick(&mut tui, "form_nutrient", "P");
+        assert_eq!(
+            tui.form.as_ref().expect("form").value("form_unit"),
+            "cmolc_per_kg",
+            "a unit already on the form is the user's, not a default to revise"
+        );
+    }
+
+    /// A lab report names its extraction, and a picker is how every closed
+    /// set in this app is filled — except this one is not closed: a lab is
+    /// free to report an extraction nobody here has seen.
+    #[test]
+    fn the_method_list_offers_what_that_nutrient_is_read_with_and_nothing_else() {
+        let mut tui = tui();
+        tui.open(Some(Screen::NewSample));
+
+        let methods = |tui: &mut Tui| {
+            go_to_field(tui, "form_method");
+            press(tui, KeyCode::Enter);
+            let options = tui.picker.as_ref().expect("the method list").options.clone();
+            tui.picker = None;
+            options
+        };
+
+        // A phosphorus extraction on a cation is not a choice, it is a
+        // wrong answer waiting in a menu.
+        pick(&mut tui, "form_nutrient", "Ca");
+        let calcium = methods(&mut tui);
+        assert_eq!(calcium, vec!["AcONH4_1N_pH7".to_string(), TYPE_IT_IN.to_string()]);
+        for wrong in ["Olsen", "Mehlich", "Bray_II", "hot_water"] {
+            assert!(!calcium.contains(&wrong.to_string()), "{wrong} is not how calcium is read: {calcium:?}");
+        }
+
+        // Phosphorus is the nutrient the method actually reclassifies, and
+        // it gets all three of its own.
+        pick(&mut tui, "form_nutrient", "P");
+        let phosphorus = methods(&mut tui);
+        for expected in ["Bray_II", "Olsen", "Mehlich"] {
+            assert!(phosphorus.contains(&expected.to_string()), "{phosphorus:?}");
+        }
+        // ...and the method the last nutrient answered for is gone with it.
+        assert_eq!(tui.form.as_ref().expect("form").value("form_method"), "");
+
+        // Every list keeps the row that hands the field back for typing: a
+        // lab is free to report an extraction nobody here has seen.
+        assert_eq!(phosphorus.last().map(String::as_str), Some(TYPE_IT_IN));
+        go_to_field(&mut tui, "form_method");
+        press(&mut tui, KeyCode::Enter);
+        let last = tui.picker.as_ref().expect("picker").options.len() - 1;
+        tui.picker.as_mut().expect("picker").idx = last;
+        tui.commit_picker();
+        assert!(tui.form.as_ref().expect("form").editing, "the sentinel starts a text entry");
+        for c in "NTC_5350".chars() {
+            press(&mut tui, KeyCode::Char(c));
+        }
+        assert_eq!(tui.form.as_ref().expect("form").value("form_method"), "NTC_5350");
+    }
+
+    /// In the table the same list is walked with `h`/`l`, and an empty
+    /// method cell offers the extraction that nutrient is customarily read
+    /// with — one press for the common case, still an act.
+    #[test]
+    fn an_empty_method_cell_offers_the_extraction_that_nutrient_is_read_with() {
+        let mut tui = tui();
+        tui.screen = Screen::Dashboard;
+        press(&mut tui, KeyCode::Char('b'));
+
+        for (nutrient, expected) in [("P", "Bray_II"), ("Ca", "AcONH4_1N_pH7"), ("Al", "KCl_1N"), ("B", "hot_water")] {
+            {
+                let batch = tui.batch.as_mut().expect("a table");
+                batch.row = batch.rows.iter().position(|row| row[0] == nutrient).expect("a row");
+                batch.col = BATCH_COL_METHOD;
+                assert_eq!(batch.rows[batch.row][BATCH_COL_METHOD], "", "the cell starts empty");
+            }
+            press(&mut tui, KeyCode::Char('l'));
+            let batch = tui.batch.as_ref().expect("a table");
+            assert_eq!(batch.rows[batch.row][BATCH_COL_METHOD], expected, "{nutrient}");
+        }
+
+        // From there it is a list like any other...
+        let method_of = |tui: &Tui, nutrient: &str| {
+            let batch = tui.batch.as_ref().expect("a table");
+            batch.rows.iter().find(|row| row[0] == nutrient).expect("a row")[BATCH_COL_METHOD].clone()
+        };
+        {
+            let batch = tui.batch.as_mut().expect("a table");
+            batch.row = batch.rows.iter().position(|row| row[0] == "P").expect("a row");
+        }
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(method_of(&tui, "P"), "Olsen", "h/l walks on through that nutrient's own list");
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(method_of(&tui, "P"), "Mehlich");
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(method_of(&tui, "P"), "Bray_II", "and comes back round");
+        // Boron has one extraction, so there is nowhere to walk to.
+        {
+            let batch = tui.batch.as_mut().expect("a table");
+            batch.row = batch.rows.iter().position(|row| row[0] == "B").expect("a row");
+        }
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(method_of(&tui, "B"), "hot_water", "a one-entry list stays put rather than emptying");
+
+        // ...and `e` still types one the list has never heard of.
+        set_cell(&mut tui, "Zn", BATCH_COL_METHOD, "NTC_5526");
+        assert_eq!(method_of(&tui, "Zn"), "NTC_5526");
+    }
+
+    /// One key writes whatever is being filled in, wherever the cursor
+    /// happens to be on it. The save row and the last cell still work —
+    /// this is the key for not walking to them.
+    #[test]
+    fn s_saves_what_is_on_screen_from_anywhere_on_it() {
+        let sandbox = Sandbox::new("save_key");
+        let mut tui = sandbox.tui();
+        let curated = sandbox.root.join("data/curated/soil_tests.csv");
+        let written = || std::fs::read_to_string(&curated).expect("curated file");
+
+        // A form, from its first field rather than from the save row.
+        tui.screen = Screen::Dashboard;
+        press(&mut tui, KeyCode::Char('a'));
+        assert_eq!(tui.screen, Screen::NewSample, "`a` is the reading key now");
+        pick(&mut tui, "form_nutrient", "P");
+        fill(&mut tui, "form_value", "21");
+        fill(&mut tui, "form_method", "Olsen");
+        fill(&mut tui, "form_depth_to", "20");
+        go_to_field(&mut tui, "form_field_id");
+        press(&mut tui, KeyCode::Char('s'));
+        assert!(!tui.is_error, "the reading should have saved: {}", tui.message);
+
+        // And the table, from a cell that is not the last one.
+        press(&mut tui, KeyCode::Esc);
+        press(&mut tui, KeyCode::Char('b'));
+        set_cell(&mut tui, "Zn", BATCH_COL_VALUE, "1.8");
+        set_cell(&mut tui, "Zn", BATCH_COL_METHOD, "DTPA");
+        {
+            let batch = tui.batch.as_mut().expect("a table");
+            batch.row = 0;
+            batch.col = BATCH_COL_VALUE;
+            assert!(!batch.on_last_cell(), "the point is that this is not where Enter commits");
+        }
+        press(&mut tui, KeyCode::Char('s'));
+        assert!(!tui.is_error, "the panel should have saved: {}", tui.message);
+        assert_eq!(tui.screen, Screen::Dashboard, "a committed table is done");
+
+        // Both writes are on disk. The curated writer supersedes a reading
+        // of the same nutrient rather than appending a second one, so this
+        // is what the rows say and not how many there are.
+        let file = written();
+        assert!(file.contains(",P,21,mg_per_kg,Olsen,"), "the form's reading:\n{file}");
+        assert!(file.contains(",Zn,1.8,mg_per_kg,DTPA,"), "the table's reading:\n{file}");
+    }
+
     /// A reading belongs to a lot. With nothing curated the sample form's
     /// lot field has nothing to prefill or pick from and degrades to free
     /// text, which is a lot id nobody can typo-check.
@@ -2309,7 +2591,7 @@ mod tests {
         tui.screen = Screen::Dashboard;
         tui.lots.clear();
 
-        for key in ['s', 'b'] {
+        for key in ['a', 'b'] {
             press(&mut tui, KeyCode::Char(key));
             assert_eq!(tui.screen, Screen::Dashboard, "`{key}` opened a reading with no lot to attach it to");
             assert!(tui.is_error, "and said nothing about why");
@@ -2343,17 +2625,32 @@ mod tests {
         assert_eq!(rows.len(), soil_test_nutrients().len(), "one row per nutrient a lab reports");
         assert!(rows.iter().all(|row| row[0] != "N"), "N is derived from organic matter, never measured");
 
-        // Two rows of twelve, and the unit picked the way every closed set
-        // in this app is picked.
+        // A reading off the exchange complex opens in the charge unit its
+        // report states it in; everything else in mg/kg.
+        let unit_of = |tui: &Tui, nutrient: &str| {
+            let batch = tui.batch.as_ref().expect("a table");
+            batch.rows.iter().find(|row| row[0] == nutrient).expect("a row")[BATCH_COL_UNIT].clone()
+        };
+        for base in ["K", "Ca", "Mg", "Al"] {
+            assert_eq!(unit_of(&tui, base), "cmolc_per_kg", "{base} is read as a charge");
+        }
+        for other in ["P", "S", "Zn"] {
+            assert_eq!(unit_of(&tui, other), "mg_per_kg", "{other} is not");
+        }
+
+        // Two rows of twelve, and the unit still walks with h/l.
         set_cell(&mut tui, "P", BATCH_COL_VALUE, "14");
-        set_cell(&mut tui, "P", 3, "Olsen");
+        set_cell(&mut tui, "P", BATCH_COL_METHOD, "Olsen");
         set_cell(&mut tui, "K", BATCH_COL_VALUE, "0.4");
-        set_cell(&mut tui, "K", 3, "NH4OAc");
+        set_cell(&mut tui, "K", BATCH_COL_METHOD, "NH4OAc");
         {
             let batch = tui.batch.as_mut().expect("a table");
             batch.col = BATCH_COL_UNIT;
         }
         press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(unit_of(&tui, "K"), "mg_per_kg", "h/l overrides the suggestion");
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(unit_of(&tui, "K"), "cmolc_per_kg", "and comes back round");
         assert_eq!(tui.batch.as_ref().expect("a table").entries().len(), 2, "an untouched row is not a reading");
 
         // Enter commits from the last cell, and only from there.
@@ -2372,7 +2669,10 @@ mod tests {
         let ours: Vec<&str> = written.lines().filter(|line| line.starts_with(&format!("{lot},"))).collect();
         assert_eq!(ours.len(), rows_before, "an untouched row must not become a reading:\n{written}");
         assert!(ours.iter().any(|line| line.contains(",P,14,mg_per_kg,Olsen,")), "{ours:?}");
-        assert!(ours.iter().any(|line| line.contains(",K,0.4,cmolc_per_kg,NH4OAc,")), "the picked unit has to survive: {ours:?}");
+        assert!(
+            ours.iter().any(|line| line.contains(",K,0.4,cmolc_per_kg,NH4OAc,")),
+            "the unit on the cell has to survive the write: {ours:?}"
+        );
     }
 
     /// Esc is the way out of the table, and nothing typed into it is
@@ -2745,7 +3045,7 @@ mod tests {
             "LOT-900",
             "the sample form must default to the selected lot"
         );
-        fill(&mut tui, "form_nutrient", "P");
+        pick(&mut tui, "form_nutrient", "P");
         fill(&mut tui, "form_value", "12");
         fill(&mut tui, "form_unit", "mg_per_kg");
         fill(&mut tui, "form_method", "Olsen");

@@ -3,7 +3,7 @@
 //! goes through `tui.i18n`.
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
@@ -25,6 +25,22 @@ const BAR: u16 = 1;
 
 /// The accent rule down the left edge of a selected row.
 const MARKER: &str = "▎";
+
+/// The insertion point, and the only thing on screen that answers "where
+/// am I typing". It blinks for the same reason every text cursor since the
+/// VT100 has: a block that holds still is one more filled cell, and this
+/// app draws filled cells everywhere — a marker rule, a selected row, a
+/// balance bar.
+///
+/// Not `Frame::set_cursor_position`, which would hand the job to the
+/// terminal's own cursor: the four places that need a caret are all inside
+/// scrolling lists and tables, where the cell it lands on is the widget's
+/// arithmetic and not this function's. A terminal that ignores SGR 5 shows
+/// the block and loses nothing but the blink.
+fn caret<'a>(tui: &Tui, on: bool) -> Span<'a> {
+    let style = if on { tui.theme.accent().add_modifier(Modifier::SLOW_BLINK) } else { Style::default() };
+    Span::styled(if on { "█" } else { "" }, style)
+}
 
 /// The stepper's numerals for a stage not reached yet, and the tick for
 /// one that is done. Five stages, five glyphs.
@@ -718,7 +734,6 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
         .enumerate()
         .map(|(index, field)| {
             let editing = form.editing && index == form.idx;
-            let cursor = if editing { "█" } else { "" };
             // "▾" means Enter unfolds a list.
             let marker = if field.is_choice() { " ▾" } else { "" };
             let value = if field.is_choice() && field.value.is_empty() {
@@ -728,7 +743,8 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {:<22}", tui.i18n.t(field.label)), tui.theme.muted()),
-                Span::styled(format!("{value}{cursor}"), tui.theme.accent()),
+                Span::styled(value, tui.theme.accent()),
+                caret(tui, editing),
                 Span::styled(marker.to_string(), tui.theme.muted()),
             ]))
         })
@@ -776,6 +792,15 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     );
 }
 
+/// The lab panel's columns, in [`super::BATCH_COLUMNS`] order. One place,
+/// because the table lays itself out by these *and* every cell pads itself
+/// to them — an empty cell has to be as wide as a full one, or the cursor
+/// has nothing to land on.
+///
+/// Sized to the 80-column terminal, where the workspace has about 54 to
+/// give: the four fixed columns take 40 and the method keeps the rest.
+const BATCH_WIDTHS: [u16; 5] = [6, 10, 14, 10, 10];
+
 /// A whole lab panel as one table: a row per nutrient, filled in any
 /// order, written in one pass. The form beside it still exists for the
 /// single reading that arrives on its own.
@@ -802,7 +827,6 @@ fn sample_batch(frame: &mut Frame, area: Rect, tui: &Tui) {
                     .enumerate()
                     .map(|(column, text)| {
                         let here = index == batch.row && column == batch.col;
-                        let cursor = if here && batch.editing { "█" } else { "" };
                         let style = match (column, here) {
                             // Column 0 names the row rather than holding a
                             // value, so it never wears the cell cursor.
@@ -810,7 +834,21 @@ fn sample_batch(frame: &mut Frame, area: Rect, tui: &Tui) {
                             (_, true) => tui.theme.selected(),
                             _ => tui.theme.base(),
                         };
-                        Cell::from(Span::styled(format!("{text}{cursor}"), style))
+                        let editing = here && batch.editing;
+                        // Padded to its column, because reverse video on a
+                        // zero-length span paints nothing: `value` and
+                        // `method` start empty, so the cursor was invisible
+                        // on exactly the two cells you go there to fill,
+                        // while `unit` and `depth` — never empty — lit up.
+                        let filled = text.chars().count() + usize::from(editing);
+                        let pad = " ".repeat((BATCH_WIDTHS[column] as usize).saturating_sub(filled));
+                        Cell::from(Line::from(vec![
+                            Span::styled(text.clone(), style),
+                            // Between the text and the padding, so it sits
+                            // where the next character will land.
+                            caret(tui, editing),
+                            Span::styled(pad, style),
+                        ]))
                     })
                     .collect::<Vec<_>>(),
             )
@@ -820,11 +858,13 @@ fn sample_batch(frame: &mut Frame, area: Rect, tui: &Tui) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(6),
-            Constraint::Length(10),
-            Constraint::Length(14),
-            Constraint::Min(10),
-            Constraint::Length(10),
+            Constraint::Length(BATCH_WIDTHS[0]),
+            Constraint::Length(BATCH_WIDTHS[1]),
+            Constraint::Length(BATCH_WIDTHS[2]),
+            // The one column that grows: `Ca_H2PO4_2_0.008M` is 17 wide
+            // and a method nobody here has seen may be wider still.
+            Constraint::Min(BATCH_WIDTHS[3]),
+            Constraint::Length(BATCH_WIDTHS[4]),
         ],
     )
     .header(header(tui, &super::BATCH_COLUMNS))
@@ -1251,7 +1291,6 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
         Layout::vertical([Constraint::Length(2), Constraint::Min(0), Constraint::Length(2)]).areas(area);
 
     let matches = tui.filtered_crops();
-    let cursor = if tui.filtering { "█" } else { "" };
     let count = Line::styled(
         format!("{} / {} {}", matches.len(), tui.crops.len(), tui.i18n.t("crops_matches")),
         if matches.is_empty() { tui.theme.error() } else { tui.theme.ok() },
@@ -1261,7 +1300,8 @@ fn crops(frame: &mut Frame, area: Rect, tui: &Tui) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("/ ", tui.theme.accent()),
-            Span::styled(format!("{}{cursor}", tui.filter), tui.theme.strong()),
+            Span::styled(tui.filter.clone(), tui.theme.strong()),
+            caret(tui, tui.filtering),
         ])),
         typed_area,
     );
@@ -1333,7 +1373,6 @@ fn target(frame: &mut Frame, area: Rect, tui: &Tui) {
     };
     let curated = tui.curated_yield_target().cloned();
     let typed = tui.typed_yield_target();
-    let cursor = if tui.editing_yield { "█" } else { "" };
     let shown = if tui.editing_yield {
         tui.yield_input.clone()
     } else {
@@ -1359,7 +1398,8 @@ fn target(frame: &mut Frame, area: Rect, tui: &Tui) {
         Line::raw(""),
         Line::from(vec![
             Span::styled(on(super::TARGET_ROW_GOAL), tui.theme.accent()),
-            Span::styled(format!("{shown}{cursor}"), tui.theme.title()),
+            Span::styled(shown, tui.theme.title()),
+            caret(tui, tui.editing_yield),
             Span::styled(format!(" {}", super::YIELD_UNIT), tui.theme.muted()),
             // Named for what it is, including when it is nothing: this pair
             // has no curated goal and none was typed, so the plan cannot
@@ -1849,11 +1889,11 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
     match tui.screen {
         // Both readings keys act on the lot under the cursor, so the
         // overlay says whose reading it would be.
-        Screen::Dashboard => keys.insert(0, ("s · b", "help_sample_needs_lot")),
+        Screen::Dashboard => keys.insert(0, ("a · b", "help_sample_needs_lot")),
         Screen::SampleBatch => {
             keys.insert(0, ("Tab", "help_batch_cell"));
             keys.insert(1, ("e", "help_batch_edit"));
-            keys.insert(2, ("Enter", "help_batch_save"));
+            keys.insert(2, ("s", "help_batch_save"));
         }
         Screen::Crops => keys.insert(0, ("/", "help_filter")),
         Screen::Target => {
@@ -1863,7 +1903,8 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
         }
         Screen::Settings => keys.insert(0, ("h/l · ←/→", "help_change")),
         Screen::NewLot | Screen::EditLot | Screen::NewSample | Screen::Import => {
-            keys.insert(0, ("Enter", if tui.picker.is_some() { "help_pick" } else { "help_edit" }))
+            keys.insert(0, ("Enter", if tui.picker.is_some() { "help_pick" } else { "help_edit" }));
+            keys.insert(1, ("s", "help_save"));
         }
         _ => {}
     }
@@ -2175,6 +2216,76 @@ mod tests {
             out.contains(&tui.i18n.t("launch_sources_ready").to_string()),
             "shipped reference data means the sources report ready"
         );
+    }
+
+    /// Four screens take typing and every one of them draws the same
+    /// caret, blinking, only where the keys are actually going.
+    #[test]
+    fn the_caret_blinks_and_only_where_the_typing_lands() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+
+        let lit = caret(&tui, true);
+        assert_eq!(lit.content, "█");
+        assert!(lit.style.add_modifier.contains(Modifier::SLOW_BLINK), "a caret that holds still is a filled cell");
+        assert_eq!(caret(&tui, false).content, "", "and nothing at all where nothing is being typed");
+
+        // Every screen that takes typing is drawn with one on and one off,
+        // so a caret left behind on an idle screen would show up here.
+        let blinks = |tui: &Tui| render(tui, 130, 40).contains('█');
+        tui.open_form(Screen::NewLot);
+        assert!(!blinks(&tui), "a form that is not being edited has no caret");
+        tui.form.as_mut().expect("form").editing = true;
+        assert!(blinks(&tui), "and one that is, has");
+
+        tui.open_batch();
+        assert!(!blinks(&tui), "the table is navigated before it is typed into");
+        tui.batch.as_mut().expect("a table").editing = true;
+        assert!(blinks(&tui), "and the caret lands in the cell under the cursor");
+
+        tui.screen = Screen::Crops;
+        tui.filtering = true;
+        assert!(blinks(&tui), "the filter takes typing too");
+    }
+
+    /// The cell cursor has to be visible on the two columns you open the
+    /// table to fill. It was not: reverse video on a zero-length span
+    /// paints nothing, so `value` and `method` — empty until typed — looked
+    /// unfocused while `unit` and `depth` lit up.
+    #[test]
+    fn the_cell_cursor_shows_on_an_empty_cell_as_much_as_on_a_full_one() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open_batch();
+
+        // Counted off the painted buffer, not off the spans: on this screen
+        // the lot list wears the accent rather than the selection, so every
+        // selected cell here belongs to the table.
+        let lit = |tui: &Tui| {
+            let mut terminal = Terminal::new(TestBackend::new(130, 40)).expect("test backend");
+            terminal.draw(|frame| draw(frame, tui)).expect("draw");
+            let selected = tui.theme.selected();
+            // Colour and weight, not the whole `Style`: a painted cell
+            // carries an `underline_color` the theme never names, so
+            // comparing the structs whole would never match anything.
+            let same = |style: Style| {
+                (style.fg, style.bg, style.add_modifier)
+                    == (selected.fg, selected.bg, selected.add_modifier)
+            };
+            terminal.backend().buffer().content().iter().filter(|cell| same(cell.style())).count()
+        };
+
+        for (column, name) in super::super::BATCH_COLUMNS.iter().enumerate().skip(1).map(|(i, id)| (i, *id)) {
+            tui.batch.as_mut().expect("a table").col = column;
+            assert_eq!(
+                lit(&tui),
+                BATCH_WIDTHS[column] as usize,
+                "`{name}` must light its whole cell, full or empty"
+            );
+        }
+
+        // Column 0 names the row and is never landed on, so nothing is lit
+        // there — that is the marker rule's job, not the cursor's.
+        tui.batch.as_mut().expect("a table").col = 0;
+        assert_eq!(lit(&tui), 0);
     }
 
     /// The whole lab panel on screen at both densities: twelve rows, five
