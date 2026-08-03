@@ -2069,7 +2069,7 @@ mod tests {
     /// A compound that carries one required nutrient is a straight with
     /// ballast attached, and the slot is better left empty.
     ///
-    /// Measured on EJ-HORT/potato: the soil tested high in P, so the plan
+    /// Measured on EX-SANDY/potato: the soil tested high in P, so the plan
     /// asked for N and S only. The slot was filled with 988 kg/ha of DAP —
     /// 452 kg/ha of P2O5 nobody asked for and a 1071 kg/ha program — over
     /// the 432 kg/ha of urea and ammonium sulfate that cover it exactly.

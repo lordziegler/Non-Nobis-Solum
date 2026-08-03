@@ -42,12 +42,20 @@ pub const REFERENCE: [ShippedFile; 18] = [
 /// `examples/` where the TUI's file picker finds them, and nothing enters
 /// anyone's records until they choose to import them.
 ///
-/// - `EJ-CAFE` — an acid ash-derived coffee lot (pH 4.9, Al 2.6 cmolc/kg).
+/// Each id names the condition it demonstrates, not a place or a crop —
+/// that is the only reason each of them is here:
+///
+/// - `EX-ACID` — an acid ash-derived coffee lot (pH 4.9, Al 2.6 cmolc/kg).
 ///   Reaches liming and the Andean profile's phosphorus overrides.
-/// - `EJ-HORT` — a sandy irrigated horticulture lot with low CEC. Reaches
+/// - `EX-SANDY` — a sandy irrigated horticulture lot with low CEC. Reaches
 ///   the coarse-texture leaching modifiers for N, K and S.
-/// - `EJ-CALI` — a calcareous lot at pH 7.9. Reaches the high-pH bands for
-///   ammonia volatilization and Ca-phosphate fixation.
+/// - `EX-CALCAREOUS` — a calcareous lot at pH 7.9. Reaches the high-pH bands
+///   for ammonia volatilization and Ca-phosphate fixation.
+///
+/// Their coordinates are illustrative, like the curated lots' own: they
+/// place each example in a region whose reference tables answer for it,
+/// and they are not surveyed positions. The soil figures are typical of
+/// the condition each one is named for, not readings from a lab report.
 pub const EXAMPLES: [ShippedFile; 3] = [
     ("examples/lots.csv", include_str!("../../data/examples/lots.csv")),
     ("examples/soil_tests.csv", include_str!("../../data/examples/soil_tests.csv")),

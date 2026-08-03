@@ -1,4 +1,4 @@
 field_id,texture,irrigation_system,organic_matter_percent,ph,cec,bulk_density_kg_dm3,arable_depth_m,region,latitude,longitude,altitude_m,area_ha,crop_id,yield_value,yield_unit
-EJ-CAFE,clay_loam,rainfed,7.4,4.9,21.0,0.95,0.25,andina_colombia,1.8103,-76.0475,1750,3.5,coffee,2.2,t_ha
-EJ-HORT,sandy_loam,drip,1.6,6.4,7.5,1.48,0.20,andina_colombia,4.1420,-73.6266,320,1.8,potato,26,t_ha
-EJ-CALI,silty_clay_loam,sprinkler,2.3,7.9,26.0,1.32,0.30,global,10.4631,-73.2532,120,42,corn,8.5,t_ha
+EX-ACID,clay_loam,rainfed,7.4,4.9,21.0,0.95,0.25,andina_colombia,1.8103,-76.0475,1750,3.5,coffee,2.2,t_ha
+EX-SANDY,sandy_loam,drip,1.6,6.4,7.5,1.48,0.20,andina_colombia,4.1420,-73.6266,320,1.8,potato,26,t_ha
+EX-CALCAREOUS,silty_clay_loam,sprinkler,2.3,7.9,26.0,1.32,0.30,global,10.4631,-73.2532,120,42,corn,8.5,t_ha

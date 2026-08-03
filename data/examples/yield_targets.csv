@@ -1,3 +1,3 @@
 field_id,crop_id,yield_value,yield_unit
-EJ-HORT,tomato,55,t_ha
-EJ-CALI,wheat,5.2,t_ha
+EX-SANDY,tomato,55,t_ha
+EX-CALCAREOUS,wheat,5.2,t_ha

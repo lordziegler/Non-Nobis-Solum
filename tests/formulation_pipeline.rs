@@ -543,7 +543,7 @@ fn both_profiles_still_produce_a_plan_with_the_band_table_wired() {
 #[test]
 fn the_three_shipped_examples_import_and_plan() {
     use non_nobis_solum::core::application::FertilityScenario;
-    use non_nobis_solum::core::ports::FertilityCalculatorPort;
+    use non_nobis_solum::core::ports::{FertilityCalculatorPort, FieldContextRepository, ListLotsPort};
     use non_nobis_solum::infra::bootstrap::{self, CuratedSeed};
     use non_nobis_solum::infra::csv_import;
 
@@ -561,11 +561,43 @@ fn the_three_shipped_examples_import_and_plan() {
         assert!(report.accepted > 0, "{file} imported nothing");
     }
 
+    // Every goal the examples ship, not a list repeated here: a lot is
+    // registered with one crop and `yield_targets.csv` adds more, and a
+    // hardcoded triple would not notice a fourth example — or a fourth
+    // crop on an existing one.
+    let layout = DataLayout::new(&root, "global");
+    let lots = bootstrap::build_list_lots(&layout).list_lots().expect("the examples are listed");
+    assert_eq!(lots.len(), 3, "three example lots, {} listed", lots.len());
+    let mut planned = 0;
+    for lot in &lots {
+        // The lot's own region is the profile whose reference tables answer
+        // for it; planning it against another one is a different question.
+        let region = bootstrap::build_field_contexts(&layout)
+            .get_context_by_field_id(&lot.field_id)
+            .unwrap_or_else(|e| panic!("{}: {e}", lot.field_id))
+            .region;
+        assert!(!lot.curated_targets.is_empty(), "{} imported without a goal", lot.field_id);
+        for (crop, _) in &lot.curated_targets {
+            bootstrap::build_calculate_fertility_plan(&DataLayout::new(&root, &region), None)
+                .unwrap_or_else(|e| panic!("{}/{crop}: {e}", lot.field_id))
+                .calculate(FertilityScenario {
+                    sample_id: lot.field_id.clone(),
+                    field_id: lot.field_id.clone(),
+                    crop_id: crop.clone(),
+                    demand_mode: NutrientDemandMode::Extraction,
+                    yield_override: None,
+                })
+                .unwrap_or_else(|e| panic!("{}/{crop} failed to plan: {e}", lot.field_id));
+            planned += 1;
+        }
+    }
+    assert_eq!(planned, 5, "three lots and the two extra goals, {planned} planned");
+
     // Each example is here because it reaches somewhere the others do not.
     for (lot, crop, profile, reaches) in [
-        ("EJ-CAFE", "coffee", "andina_colombia", "liming"),
-        ("EJ-HORT", "potato", "andina_colombia", "a dose"),
-        ("EJ-CALI", "corn", "global", "a dose"),
+        ("EX-ACID", "coffee", "andina_colombia", "liming"),
+        ("EX-SANDY", "potato", "andina_colombia", "a dose"),
+        ("EX-CALCAREOUS", "corn", "global", "a dose"),
     ] {
         let plan = bootstrap::build_calculate_fertility_plan(&DataLayout::new(&root, profile), None)
             .unwrap_or_else(|e| panic!("{lot}: {e}"))
