@@ -1,0 +1,7 @@
+sample_id,nutrient_id,value,unit,method_id,depth_from_cm,depth_to_cm
+TEMPLATE-01,P,18,mg_per_kg,Olsen,0,20
+TEMPLATE-01,K,0.25,cmolc_per_kg,AcONH4_1N_pH7,0,20
+TEMPLATE-01,Ca,4.5,cmolc_per_kg,AcONH4_1N_pH7,0,20
+TEMPLATE-01,Mg,1.2,cmolc_per_kg,AcONH4_1N_pH7,0,20
+TEMPLATE-01,S,12,mg_per_kg,turbidimetric,0,20
+TEMPLATE-01,Al,0.4,cmolc_per_kg,KCl_1N,0,20

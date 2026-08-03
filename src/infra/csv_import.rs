@@ -325,6 +325,44 @@ mod tests {
         assert_eq!(repo.get_yield_target("FINCA-A", "corn").expect("corn").value, 9.0);
     }
 
+    /// The sheets in `assets/` are what someone is asked to fill in, so
+    /// they have to import as they ship — header recognised, every row
+    /// accepted, in the order the README gives.
+    ///
+    /// A template that has drifted from the code is worse than no template:
+    /// it is a file the app tells you is wrong after you have filled it.
+    #[test]
+    fn the_shipped_import_templates_still_import() {
+        let sandbox = Sandbox::new("templates");
+        let use_case = bootstrap::build_register_lot(&DataLayout::new(&sandbox.root, "global"));
+
+        for (file, expected) in [
+            ("import-template-lots.csv", ImportKind::Lots),
+            ("import-template-soil-tests.csv", ImportKind::SoilTests),
+            ("import-template-yield-targets.csv", ImportKind::YieldTargets),
+        ] {
+            let report = import(Path::new("assets").join(file).as_path(), &use_case)
+                .unwrap_or_else(|e| panic!("{file}: {e}"));
+            assert_eq!(report.kind, expected, "{file} is read as the wrong shape");
+            assert!(report.rejected.is_empty(), "{file} rejected {:?}", report.rejected);
+            assert!(report.accepted > 0, "{file} has no example row to fill in from");
+        }
+
+        // And the lot they describe is a lot the engine can actually plan.
+        let goal = CsvYieldTargetsRepo::new(sandbox.curated("yield_targets.csv"))
+            .get_yield_target("TEMPLATE-01", "corn")
+            .expect("the lot sheet carries the first planning row");
+        assert_eq!(goal.unit, "t_ha");
+        assert_eq!(
+            CsvSoilTestsRepo::new(sandbox.curated("soil_tests.csv"))
+                .get_tests_by_sample_id("TEMPLATE-01")
+                .expect("readings")
+                .len(),
+            6,
+            "the readings sheet has to land on the lot the lot sheet registered"
+        );
+    }
+
     /// A whole lot arrives in one row, planning included.
     #[test]
     fn a_lot_file_writes_the_lot_and_its_first_planning_row() {
