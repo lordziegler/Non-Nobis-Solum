@@ -199,7 +199,7 @@ mode_filter = "FILTRO"
 mode_help = "AYUDA"
 mode_yield = "REND."
 mode_edit = "EDICIÓN"
-hint_dashboard = "j/k menú · h/l lote · Enter abrir · teclas n c e s x i , · q salir · ? ayuda"
+hint_dashboard = "j/k menú · h/l lote · Enter abrir · teclas n c e x i , · s b lecturas del lote · q salir"
 hint_crops = "/ filtra · Enter elegir cultivo · h/l o [/] etapa · Esc volver"
 hint_plan = "j/k desplazar · h/l o [/] etapa · Tab panel · Esc volver · ? ayuda"
 hint_inspect = "j/k desplazar · h/l o [/] etapa · Tab panel · Esc volver · ? ayuda"
@@ -264,3 +264,24 @@ action_settings = "Ajustes"
 msg_copy_lot = "copia del lote — ponle un id nuevo"
 module_plan = "Fertilización"
 action_quit = "Salir"
+
+# el panel de laboratorio como tabla (una visita, un informe entero)
+action_batch = "Panel de laboratorio"
+form_batch_title = "Panel de laboratorio"
+batch_note = "llena las filas que trae este informe — el resto se ignoran"
+batch_hint = "Tab celda · j/k fila · e editar · h/l unidad · Enter en la última celda guarda · Esc descartar"
+hint_batch = "Tab celda · j/k fila · e editar · Enter en la última celda guarda · Esc descartar"
+msg_batch_open = "una fila por nutriente — sólo se escriben las filas con valor"
+err_no_readings = "no hay lectura que guardar: escribe un valor en al menos una fila"
+help_batch_cell = "siguiente celda de la fila"
+help_batch_edit = "editar la celda bajo el cursor"
+help_batch_save = "en la última celda, guarda la tabla entera"
+help_sample_needs_lot = "añadir lecturas al lote seleccionado"
+
+# avisos de la etapa 1: lo que le falta al panel, dicho donde aún se puede llenar
+warn_no_al_test = "sin lectura de Al: este lote se planifica sin recomendación de encalado"
+warn_zero_nutrient = "leído como cero — bajo el límite de detección, o no medido:"
+
+# un par (lote, cultivo) sin objetivo por ninguna parte
+err_no_yield_goal = "este lote no tiene objetivo de rendimiento para este cultivo: escribe uno en la etapa Objetivo"
+target_no_goal = "sin objetivo para este cultivo — escribe uno"

@@ -9,6 +9,7 @@ pub mod i18n;
 pub mod theme;
 mod ui;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -50,6 +51,9 @@ pub enum Screen {
     /// submitted through `edit_lot` instead of `register_lot`.
     EditLot,
     NewSample,
+    /// The whole lab panel as one editable table: a row per nutrient, any
+    /// number of them filled, written in a single pass.
+    SampleBatch,
     /// Bulk entry: point at a CSV, get every row validated the way a typed
     /// one is.
     Import,
@@ -93,12 +97,13 @@ pub fn module_screen(screen: Screen) -> Screen {
 /// Label id, key, glyph. Every one of them is reachable three ways: by its
 /// key from either pane, from the launcher menu with the cursor on it, and
 /// — for the first — with `Enter` on the lot list.
-pub const LOT_ACTIONS: [(&str, char, &str); 9] = [
+pub const LOT_ACTIONS: [(&str, char, &str); 10] = [
     ("action_plan", '⏎', "◈"),
     ("action_new", 'n', "+"),
     ("action_copy", 'c', "⧉"),
     ("action_edit", 'e', "✎"),
     ("action_sample", 's', "⌕"),
+    ("action_batch", 'b', "▤"),
     ("action_delete", 'x', "␡"),
     ("action_import", 'i', "⇥"),
     ("action_settings", ',', "⚙"),
@@ -223,6 +228,126 @@ const NEW_SAMPLE_FIELDS: [&str; 7] = [
     "form_depth_from",
     "form_depth_to",
 ];
+
+/// The whole lab panel at once: one row per nutrient a lab can report, one
+/// column per thing a reading needs beyond the nutrient naming itself.
+///
+/// `form_method` is a column and not a panel-wide field because the domain
+/// requires a method on every reading *and* it changes between nutrients —
+/// Bray for P, ammonium acetate for K — so one value for the table would be
+/// a claim about provenance nobody made. `depth_from` is not a column: the
+/// single-reading form has always defaulted it to 0, and a lab panel is one
+/// layer.
+const BATCH_COLUMNS: [&str; 5] = ["form_nutrient", "form_value", "form_unit", "form_method", "form_depth_to"];
+
+/// Column 0 is the nutrient, which is what a row *is* — it names the row
+/// and is never edited, so the cursor starts on the first cell that is.
+const BATCH_FIRST_CELL: usize = 1;
+const BATCH_COL_VALUE: usize = 1;
+const BATCH_COL_UNIT: usize = 2;
+
+/// Where a fresh row starts: the unit most lab reports use and the depth
+/// the single-reading form has always suggested. Both are one keypress to
+/// change and neither is written unless the row carries a value.
+const BATCH_DEFAULT_DEPTH_CM: &str = "20";
+
+/// A whole lab panel as an editable table, held apart from [`Form`]
+/// because a form is a list of fields and this is a grid of cells: the same
+/// four columns repeated down every nutrient.
+pub struct SampleBatch {
+    /// Fixed at open time from the selection, so the table cannot drift
+    /// onto another lot half way through being filled.
+    field_id: String,
+    /// One row per nutrient, in [`BATCH_COLUMNS`] order.
+    rows: Vec<[String; BATCH_COLUMNS.len()]>,
+    row: usize,
+    col: usize,
+    editing: bool,
+}
+
+impl SampleBatch {
+    fn new(field_id: String) -> Self {
+        let rows = soil_test_nutrients()
+            .into_iter()
+            .map(|nutrient| {
+                [
+                    nutrient,
+                    String::new(),
+                    SOIL_TEST_UNITS[0].to_string(),
+                    String::new(),
+                    BATCH_DEFAULT_DEPTH_CM.to_string(),
+                ]
+            })
+            .collect();
+        Self { field_id, rows, row: 0, col: BATCH_FIRST_CELL, editing: false }
+    }
+
+    /// Only the rows somebody actually typed a number into. An untouched
+    /// row is not an error and not a zero reading — it is a nutrient this
+    /// panel did not report.
+    fn entries(&self) -> Vec<SoilTestEntry> {
+        self.rows
+            .iter()
+            .filter(|row| row[BATCH_COL_VALUE].trim().parse::<f64>().is_ok())
+            .map(|row| SoilTestEntry {
+                nutrient_id: row[0].clone(),
+                value: row[1].clone(),
+                unit: row[2].clone(),
+                method: row[3].clone(),
+                depth_from_cm: "0".to_string(),
+                depth_to_cm: row[4].clone(),
+            })
+            .collect()
+    }
+
+    fn cell(&mut self) -> Option<&mut String> {
+        self.rows.get_mut(self.row)?.get_mut(self.col)
+    }
+
+    /// The unit is a closed set, so it cycles the way every other closed
+    /// set in this app does rather than opening an overlay over a table.
+    fn cycle_unit(&mut self, delta: isize) {
+        if self.col != BATCH_COL_UNIT {
+            return;
+        }
+        let len = SOIL_TEST_UNITS.len();
+        let current = self
+            .rows
+            .get(self.row)
+            .and_then(|row| SOIL_TEST_UNITS.iter().position(|unit| *unit == row[BATCH_COL_UNIT]))
+            .unwrap_or(0);
+        let next = (current + if delta < 0 { len - 1 } else { 1 }) % len;
+        if let Some(cell) = self.cell() {
+            *cell = SOIL_TEST_UNITS[next].to_string();
+        }
+    }
+
+    /// Picked or typed, decided by the cell — the same rule the forms
+    /// follow.
+    fn activate_cell(&mut self) {
+        if self.col == BATCH_COL_UNIT {
+            self.cycle_unit(1);
+        } else {
+            self.editing = true;
+        }
+    }
+
+    /// Wraps within the editable columns, never onto the nutrient.
+    fn move_cell(&mut self, delta: isize) {
+        let last = BATCH_COLUMNS.len() - 1;
+        self.col = match delta < 0 {
+            true if self.col <= BATCH_FIRST_CELL => last,
+            true => self.col - 1,
+            false if self.col >= last => BATCH_FIRST_CELL,
+            false => self.col + 1,
+        };
+    }
+
+    /// The one cell `Enter` commits the table from.
+    fn on_last_cell(&self) -> bool {
+        self.row + 1 == self.rows.len() && self.col + 1 == BATCH_COLUMNS.len()
+    }
+}
 
 const SETTINGS: [&str; 8] = [
     "settings_language",
@@ -384,6 +509,24 @@ pub struct Picker {
     title: String,
 }
 
+/// What a plan is a function of. Stages ④ and ⑤ are two halves of one
+/// result and both enter through [`Tui::calculate`], so walking from one to
+/// the other used to spend a whole recalculation — climate lookup included
+/// — to arrive at the numbers already on screen.
+///
+/// `climate_ready` is part of the question, not of the answer: a plan
+/// computed before the prefetch landed ran on baseline constants, and
+/// reusing it after the climatology arrives would pin the session to
+/// numbers the app knows are superseded.
+#[derive(PartialEq)]
+struct PlanKey {
+    lot: String,
+    crop: String,
+    yield_goal: Option<f64>,
+    demand_mode: NutrientDemandMode,
+    climate_ready: bool,
+}
+
 pub struct Tui {
     cfg: Composition,
     /// Fetched off the render loop. `None` disables climate entirely.
@@ -434,6 +577,9 @@ pub struct Tui {
     /// names the lot in between.
     pending_delete: Option<String>,
     plan: Option<FertilityPlan>,
+    /// What question the plan beside it answers. `None` whenever `plan` is,
+    /// which is what makes "the same key" enough to reuse the result.
+    plan_key: Option<PlanKey>,
     /// The product half of the same plan: which bags, how many. Computed
     /// beside the plan and kept beside it, so stage ④ never recalculates.
     recommendation: Option<FertilizerRecommendationReport>,
@@ -444,12 +590,24 @@ pub struct Tui {
     /// Rebuilt each time a form opens, so a half-typed lot never survives
     /// a detour.
     form: Option<Form>,
+    /// The lab panel being filled in, if the batch screen is open.
+    batch: Option<SampleBatch>,
     /// The option list currently unfolded over that form, if any.
     picker: Option<Picker>,
     scroll: u16,
+    /// What the last frame actually painted on the scrolling screens, and
+    /// how much of it fitted. Written by `ui::draw` — the one thing it is
+    /// allowed to write — because the line count is a property of the
+    /// rendering, and `j` had no way to know where the page ended.
+    content_height: Cell<u16>,
+    viewport_height: Cell<u16>,
     setting_idx: usize,
     message: String,
     is_error: bool,
+    /// A third severity, and only that: a warning is information the reader
+    /// can act on, not a failure, so it must not read as one — and must not
+    /// make `is_error` lie to everything that checks it.
+    is_warning: bool,
     help: bool,
     running: bool,
 }
@@ -515,6 +673,7 @@ impl Tui {
             filtering: false,
             pending_delete: None,
             plan: None,
+            plan_key: None,
             recommendation: None,
             formulation: FormulationRequest {
                 // A stored value that no longer parses is a preference, not
@@ -533,11 +692,15 @@ impl Tui {
             },
             inspection: None,
             form: None,
+            batch: None,
             picker: None,
             scroll: 0,
+            content_height: Cell::new(0),
+            viewport_height: Cell::new(0),
             setting_idx: 0,
             message: String::new(),
             is_error: false,
+            is_warning: false,
             help: false,
             running: true,
         };
@@ -548,7 +711,14 @@ impl Tui {
         if let Some(index) = tui.lots.iter().position(|lot| lot.field_id == settings.lot) {
             tui.lot_idx = index;
         }
-        if !settings.crop.is_empty() && tui.crops.iter().any(|crop| crop.crop_id == settings.crop) {
+        // ...and only if the restored lot carries a goal for it. The typed
+        // goal is deliberately not stored — it belongs to one session's
+        // scenario, not to a preference — so restoring a crop without a
+        // curated goal would open the session on a pair that cannot plan.
+        if !settings.crop.is_empty()
+            && tui.crops.iter().any(|crop| crop.crop_id == settings.crop)
+            && tui.has_curated_yield_target(&settings.crop)
+        {
             tui.crop_override = Some(settings.crop.clone());
         }
         if !tui.is_error {
@@ -598,6 +768,7 @@ impl Tui {
         // check `is_error` afterwards for the reload's own failure.
         self.is_error = false;
         self.plan = None;
+        self.plan_key = None;
         self.inspection = None;
         self.clear_crop_choice();
         self.crop_idx = 0;
@@ -684,10 +855,20 @@ impl Tui {
 
     fn scenario(&self) -> Option<FertilityScenario> {
         let lot = self.selected_lot()?;
+        let crop_id = self.active_crop()?;
+        // A goal is as required as the crop. With none typed the use case
+        // reads the curated one, and for most (lot, crop) pairs there is
+        // none — which used to surface as the repository's own words,
+        // `no yield target for field_id=… crop_id=…`, on stage ④ or ⑤.
+        // The reader can only fix it on stage ③, so that is what the app
+        // has to say, one screen before the failure.
+        if self.typed_yield_target().is_none() && !self.has_curated_yield_target(&crop_id) {
+            return None;
+        }
         Some(FertilityScenario {
             sample_id: lot.field_id.clone(),
             field_id: lot.field_id.clone(),
-            crop_id: self.active_crop()?,
+            crop_id,
             // Extraction is the maintenance basis and the default, same as
             // the CLI; stage ③ switches it. A nutrient that needs nothing
             // on extraction is retried on absorption by the use case
@@ -706,8 +887,20 @@ impl Tui {
     fn calculate(&mut self) {
         let Some(scenario) = self.scenario() else {
             self.plan = None;
+            self.plan_key = None;
             return self.fail_missing_scenario();
         };
+        // Walking ④ → ⑤ asks the same question twice; answer it once.
+        let key = PlanKey {
+            lot: scenario.field_id.clone(),
+            crop: scenario.crop_id.clone(),
+            yield_goal: scenario.yield_override.as_ref().map(|target| target.value),
+            demand_mode: scenario.demand_mode,
+            climate_ready: self.climate_is_warm(),
+        };
+        if self.plan.is_some() && self.plan_key.as_ref() == Some(&key) {
+            return self.info("msg_plan_done");
+        }
         // The prefetched climatology, never the network: a miss falls back
         // to baseline constants, as `--no-climate` does on the CLI.
         let climate = self
@@ -718,15 +911,33 @@ impl Tui {
             Ok(plan) => {
                 self.recommendation = self.recommend(&plan);
                 self.plan = Some(plan);
+                self.plan_key = Some(key);
                 self.info("msg_plan_done");
             }
             // Shown verbatim: the port's message names what was missing.
             Err(e) => {
                 self.plan = None;
+                self.plan_key = None;
                 self.recommendation = None;
                 self.fail(e);
             }
         }
+    }
+
+    /// Whether the selected lot's climatology is already in the shared
+    /// cache. Reads memory only — the whole point of the prewarmed repo.
+    fn climate_is_warm(&self) -> bool {
+        let Some(cache) = &self.climate else { return false };
+        let Some(lot) = self.selected_lot() else { return false };
+        let (Some(latitude), Some(longitude)) = (lot.latitude, lot.longitude) else { return false };
+        cache.cached(latitude, longitude).is_some()
+    }
+
+    /// Enter on stage ⑤ means "run it again", which a cached answer would
+    /// quietly refuse. Dropping the key is what makes it a real re-run.
+    fn recalculate(&mut self) {
+        self.plan_key = None;
+        self.calculate();
     }
 
     /// Best-effort, exactly like climate: a catalog that cannot answer
@@ -756,6 +967,7 @@ impl Tui {
             Ok(inspection) => {
                 self.inspection = Some(inspection);
                 self.info("msg_inspect_done");
+                self.warn_about_the_panel();
             }
             Err(e) => {
                 self.inspection = None;
@@ -764,9 +976,43 @@ impl Tui {
         }
     }
 
-    /// A scenario needs a lot *and* a crop; say which is missing.
+    /// What stage ① can see about the lab panel that stages ④ and ⑤ would
+    /// otherwise be the first to mention — by which point the reader has
+    /// walked past the screen where the gap could still be filled.
+    ///
+    /// Informative, never blocking: a panel without Al still plans, it just
+    /// plans without a liming recommendation, and saying so here is saying
+    /// it two stages earlier than the plan does.
+    fn warn_about_the_panel(&mut self) {
+        let Some(inspection) = &self.inspection else { return };
+        if !inspection.soil_tests.iter().any(|test| test.nutrient == Nutrient::Al) {
+            return self.warn("warn_no_al_test");
+        }
+        // Zero is a real reading — "below detection" — and the plan treats
+        // it as one, so it is worth naming rather than worth refusing.
+        let zeroed: Vec<String> = inspection
+            .soil_tests
+            .iter()
+            .filter(|test| test.value == 0.0)
+            .map(|test| test.nutrient.to_string())
+            .collect();
+        if !zeroed.is_empty() {
+            let label = self.i18n.t("warn_zero_nutrient").to_string();
+            self.message = format!("{label} {}", zeroed.join(" · "));
+            self.is_error = false;
+            self.is_warning = true;
+        }
+    }
+
+    /// A scenario needs a lot, a crop *and* a goal; say which is missing.
     fn fail_missing_scenario(&mut self) {
-        let id = if self.selected_lot().is_none() { "err_no_lot" } else { "err_no_crop" };
+        let id = if self.selected_lot().is_none() {
+            "err_no_lot"
+        } else if self.active_crop().is_none() {
+            "err_no_crop"
+        } else {
+            "err_no_yield_goal"
+        };
         self.fail_key(id);
     }
 
@@ -1030,6 +1276,45 @@ impl Tui {
         }
     }
 
+    /// The lab panel as a table, on the lot under the cursor.
+    fn open_batch(&mut self) {
+        let Some(lot) = self.selected_lot() else {
+            return self.fail_key("err_no_lot");
+        };
+        self.batch = Some(SampleBatch::new(lot.field_id.clone()));
+        self.enter(Screen::SampleBatch);
+        self.info("msg_batch_open");
+    }
+
+    /// One call, not one per row: `add_soil_tests` already takes a slice
+    /// and validates the whole set before writing any of it, so a panel
+    /// with one bad row leaves nothing half-written.
+    fn commit_batch(&mut self) {
+        let Some(batch) = &self.batch else { return };
+        let entries = batch.entries();
+        let field_id = batch.field_id.clone();
+        // An empty table is not a rejection to explain, it is a table
+        // nobody filled — but committing it silently would look like a save.
+        if entries.is_empty() {
+            return self.fail_key("err_no_readings");
+        }
+        let saved = entries.len();
+        match bootstrap::build_register_lot(&self.cfg.layout()).add_soil_tests(&field_id, &entries) {
+            Ok(()) => {
+                self.batch = None;
+                self.enter(Screen::Dashboard);
+                self.reload();
+                if !self.is_error {
+                    self.message = format!("{} ({saved})", self.i18n.t("msg_sample_saved"));
+                    self.is_warning = false;
+                }
+            }
+            // The table stays on screen with everything typed in it: a
+            // refused panel is a panel to fix, not one to retype.
+            Err(e) => self.fail(e),
+        }
+    }
+
     /// Reads the chosen file through the same importer the CLI uses.
     ///
     /// The form stays open and the report stays on screen: an import that
@@ -1131,6 +1416,11 @@ impl Tui {
         if self.form.as_ref().is_some_and(|form| form.editing) {
             return self.on_form_edit_key(code);
         }
+        // The table owns its screen's keys, `Tab` included — see
+        // `on_batch_key`.
+        if self.batch.is_some() && self.screen == Screen::SampleBatch {
+            return self.on_batch_key(code);
+        }
         // `h`/`l` belong to the workspace three different ways, and the
         // module column keeps them as mnemonics — the same rule that has
         // always kept Settings' `h` from colliding with Home's.
@@ -1191,7 +1481,7 @@ impl Tui {
             // selection, not about which pane is lit. `x` is the exception
             // and stays on the lot list, where the lot it deletes is on
             // screen under the cursor.
-            KeyCode::Char(c @ ('n' | 'c' | 'e' | 's' | 'i' | ',')) if self.focus_modules || self.screen == Screen::Dashboard => {
+            KeyCode::Char(c @ ('n' | 'c' | 'e' | 's' | 'b' | 'i' | ',')) if self.focus_modules || self.screen == Screen::Dashboard => {
                 self.lot_action(c)
             }
             _ => {}
@@ -1212,6 +1502,62 @@ impl Tui {
             _ => {}
         }
         self.crop_idx = 0;
+    }
+
+    /// The table's own keys.
+    ///
+    /// `Tab` walks the cells of a row instead of the panes — the same trade
+    /// stage ③ makes with `h`/`l`, and for the same reason: the screen has
+    /// one control and it is the point of the screen. `Esc` is still the
+    /// way out, so nothing is trapped.
+    fn on_batch_key(&mut self, code: KeyCode) {
+        let Some(batch) = &self.batch else { return };
+        let (editing, on_last_cell) = (batch.editing, batch.on_last_cell());
+        if editing {
+            return self.on_batch_edit_key(code);
+        }
+        match code {
+            // Nothing is written until the table is committed, so leaving
+            // is leaving: a half-filled panel is not a draft, exactly as a
+            // half-typed form is not one.
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.batch = None;
+                self.enter(Screen::Dashboard);
+            }
+            KeyCode::Char('?') => self.help = true,
+            KeyCode::Enter if on_last_cell => self.commit_batch(),
+            _ => {
+                let Some(batch) = &mut self.batch else { return };
+                match code {
+                    KeyCode::Char('j') | KeyCode::Down => batch.row = step(batch.row, batch.rows.len(), 1),
+                    KeyCode::Char('k') | KeyCode::Up => batch.row = step(batch.row, batch.rows.len(), -1),
+                    KeyCode::Tab => batch.move_cell(1),
+                    KeyCode::BackTab => batch.move_cell(-1),
+                    KeyCode::Char('h') | KeyCode::Left => batch.cycle_unit(-1),
+                    KeyCode::Char('l') | KeyCode::Right => batch.cycle_unit(1),
+                    KeyCode::Enter | KeyCode::Char('e') => batch.activate_cell(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// A lab reading, a method name or a depth: all free text, all typed
+    /// into the cell under the cursor.
+    fn on_batch_edit_key(&mut self, code: KeyCode) {
+        let Some(batch) = &mut self.batch else { return };
+        let Some(cell) = batch.cell() else {
+            batch.editing = false;
+            return;
+        };
+        match code {
+            KeyCode::Enter | KeyCode::Esc => batch.editing = false,
+            KeyCode::Backspace => {
+                cell.pop();
+            }
+            KeyCode::Char(c) => cell.push(c),
+            _ => {}
+        }
     }
 
     /// Only digits and one separator get in.
@@ -1300,7 +1646,13 @@ impl Tui {
             'n' => self.open_form(Screen::NewLot),
             'c' => self.copy_selected_lot(),
             'e' => self.open_form(Screen::EditLot),
+            // A reading belongs to a lot. The form prefills the selected
+            // one and picks from the rest, but with nothing curated there
+            // is nothing to prefill *or* pick from — and the field falls
+            // back to free text, which is a lot id nobody can typo-check.
+            's' if self.selected_lot().is_none() => self.fail_key("err_no_lot"),
             's' => self.open_form(Screen::NewSample),
+            'b' => self.open_batch(),
             'x' => self.delete_selected_lot(),
             'i' => self.open_form(Screen::Import),
             ',' => self.enter(Screen::Settings),
@@ -1346,11 +1698,30 @@ impl Tui {
                 }
             }
             Screen::Target => self.target_idx = step(self.target_idx, TARGET_ROWS, delta),
-            // Read-only text: j/k scrolls.
-            Screen::Soil | Screen::Plan | Screen::Sources => {
-                self.scroll = if delta < 0 { self.scroll.saturating_sub(1) } else { self.scroll.saturating_add(1) }
+            // Reached only if the table screen is open without a table;
+            // `on_batch_key` owns j/k the rest of the time.
+            Screen::SampleBatch => {
+                if let Some(batch) = &mut self.batch {
+                    batch.row = step(batch.row, batch.rows.len(), delta);
+                }
             }
+            // Read-only text: j/k scrolls.
+            Screen::Soil | Screen::Plan | Screen::Sources => self.scroll_by(delta),
         }
+    }
+
+    /// The page ends where the last frame said it ended.
+    ///
+    /// Scrolling was unbounded downward: `j` past the last line kept
+    /// walking into blank space and needed as many `k` to come back. The
+    /// line count is a property of the rendering, so it comes back from
+    /// `ui::draw` — the one thing that file writes.
+    fn scroll_by(&mut self, delta: isize) {
+        let last = self.content_height.get().saturating_sub(self.viewport_height.get());
+        self.scroll = match delta < 0 {
+            true => self.scroll.saturating_sub(1),
+            false => self.scroll.saturating_add(1).min(last),
+        };
     }
 
     fn activate(&mut self) {
@@ -1385,10 +1756,13 @@ impl Tui {
             }
             Screen::Settings => self.change_setting(1),
             Screen::NewLot | Screen::EditLot | Screen::NewSample | Screen::Import => self.activate_form_row(),
+            // The table owns Enter; see `on_batch_key`.
+            Screen::SampleBatch => {}
             // Enter is "next stage" along the flow; on the last one it is
-            // "run it again", which is what a changed input wants.
+            // "run it again", which is what a changed input wants — and
+            // what the cached plan has to stand aside for.
             Screen::Soil | Screen::Target | Screen::Sources => self.go_to_stage(1),
-            Screen::Plan => self.calculate(),
+            Screen::Plan => self.recalculate(),
         }
     }
 
@@ -1483,8 +1857,10 @@ impl Tui {
         if self.screen == Screen::Dashboard {
             self.running = false;
         } else {
-            // A half-typed lot is not a draft.
+            // A half-typed lot is not a draft, and neither is a half-filled
+            // lab panel.
             self.form = None;
+            self.batch = None;
             self.picker = None;
             self.enter(Screen::Dashboard);
         }
@@ -1542,16 +1918,27 @@ impl Tui {
     fn info(&mut self, id: &str) {
         self.message = self.i18n.t(id).to_string();
         self.is_error = false;
+        self.is_warning = false;
+    }
+
+    /// Something the reader should know and can still act on. Not an error:
+    /// nothing was refused and nothing is blocked.
+    fn warn(&mut self, id: &str) {
+        self.message = self.i18n.t(id).to_string();
+        self.is_error = false;
+        self.is_warning = true;
     }
 
     fn fail(&mut self, error: DomainError) {
         self.message = error.to_string();
         self.is_error = true;
+        self.is_warning = false;
     }
 
     fn fail_key(&mut self, id: &str) {
         self.message = self.i18n.t(id).to_string();
         self.is_error = true;
+        self.is_warning = false;
     }
 }
 
@@ -1899,6 +2286,207 @@ mod tests {
         press(tui, KeyCode::Enter);
     }
 
+    /// Moves the cell cursor and types into it through real key handling.
+    fn set_cell(tui: &mut Tui, nutrient: &str, column: usize, value: &str) {
+        {
+            let batch = tui.batch.as_mut().expect("a table is on screen");
+            batch.row = batch.rows.iter().position(|row| row[0] == nutrient).expect("a row per nutrient");
+            batch.col = column;
+        }
+        press(tui, KeyCode::Char('e'));
+        for c in value.chars() {
+            press(tui, KeyCode::Char(c));
+        }
+        press(tui, KeyCode::Enter);
+    }
+
+    /// A reading belongs to a lot. With nothing curated the sample form's
+    /// lot field has nothing to prefill or pick from and degrades to free
+    /// text, which is a lot id nobody can typo-check.
+    #[test]
+    fn a_reading_needs_a_lot_to_belong_to() {
+        let mut tui = tui();
+        tui.screen = Screen::Dashboard;
+        tui.lots.clear();
+
+        for key in ['s', 'b'] {
+            press(&mut tui, KeyCode::Char(key));
+            assert_eq!(tui.screen, Screen::Dashboard, "`{key}` opened a reading with no lot to attach it to");
+            assert!(tui.is_error, "and said nothing about why");
+        }
+
+        // With a lot under the cursor both are open doors again.
+        tui.reload();
+        assert!(!tui.lots.is_empty(), "the repository ships demo lots");
+        press(&mut tui, KeyCode::Char('b'));
+        assert_eq!(tui.screen, Screen::SampleBatch);
+    }
+
+    /// A lab panel is one visit: fill the rows the report carries, leave
+    /// the rest, write once.
+    #[test]
+    fn the_batch_table_writes_only_the_rows_that_carry_a_reading() {
+        let sandbox = Sandbox::new("batch");
+        let mut tui = sandbox.tui();
+        tui.screen = Screen::Dashboard;
+        let lot = tui.selected_lot().expect("a lot").field_id.clone();
+        let curated = sandbox.root.join("data/curated/soil_tests.csv");
+        let rows_before = std::fs::read_to_string(&curated)
+            .expect("curated file")
+            .lines()
+            .filter(|line| line.starts_with(&format!("{lot},")))
+            .count();
+
+        press(&mut tui, KeyCode::Char('b'));
+        assert_eq!(tui.screen, Screen::SampleBatch);
+        let rows = &tui.batch.as_ref().expect("a table").rows;
+        assert_eq!(rows.len(), soil_test_nutrients().len(), "one row per nutrient a lab reports");
+        assert!(rows.iter().all(|row| row[0] != "N"), "N is derived from organic matter, never measured");
+
+        // Two rows of twelve, and the unit picked the way every closed set
+        // in this app is picked.
+        set_cell(&mut tui, "P", BATCH_COL_VALUE, "14");
+        set_cell(&mut tui, "P", 3, "Olsen");
+        set_cell(&mut tui, "K", BATCH_COL_VALUE, "0.4");
+        set_cell(&mut tui, "K", 3, "NH4OAc");
+        {
+            let batch = tui.batch.as_mut().expect("a table");
+            batch.col = BATCH_COL_UNIT;
+        }
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(tui.batch.as_ref().expect("a table").entries().len(), 2, "an untouched row is not a reading");
+
+        // Enter commits from the last cell, and only from there.
+        {
+            let batch = tui.batch.as_mut().expect("a table");
+            batch.row = batch.rows.len() - 1;
+            batch.col = BATCH_COLUMNS.len() - 1;
+        }
+        press(&mut tui, KeyCode::Enter);
+        assert!(!tui.is_error, "the panel should have saved: {}", tui.message);
+        assert_eq!(tui.screen, Screen::Dashboard, "a committed table is done");
+
+        // The two filled rows supersede the readings already on file for
+        // the same nutrients; the ten empty ones add nothing.
+        let written = std::fs::read_to_string(sandbox.root.join("data/curated/soil_tests.csv")).expect("curated file");
+        let ours: Vec<&str> = written.lines().filter(|line| line.starts_with(&format!("{lot},"))).collect();
+        assert_eq!(ours.len(), rows_before, "an untouched row must not become a reading:\n{written}");
+        assert!(ours.iter().any(|line| line.contains(",P,14,mg_per_kg,Olsen,")), "{ours:?}");
+        assert!(ours.iter().any(|line| line.contains(",K,0.4,cmolc_per_kg,NH4OAc,")), "the picked unit has to survive: {ours:?}");
+    }
+
+    /// Esc is the way out of the table, and nothing typed into it is
+    /// written on the way.
+    #[test]
+    fn esc_leaves_the_batch_table_without_writing_anything() {
+        let sandbox = Sandbox::new("batch_esc");
+        let mut tui = sandbox.tui();
+        tui.screen = Screen::Dashboard;
+        let before = std::fs::read_to_string(sandbox.root.join("data/curated/soil_tests.csv")).expect("curated file");
+
+        press(&mut tui, KeyCode::Char('b'));
+        set_cell(&mut tui, "P", BATCH_COL_VALUE, "99");
+        press(&mut tui, KeyCode::Esc);
+
+        assert_eq!(tui.screen, Screen::Dashboard);
+        assert!(tui.batch.is_none(), "a half-filled panel is not a draft");
+        let after = std::fs::read_to_string(sandbox.root.join("data/curated/soil_tests.csv")).expect("curated file");
+        assert_eq!(before, after, "nothing is written until the table is committed");
+    }
+
+    /// Stages ④ and ⑤ are two halves of one result, and walking from one
+    /// to the other used to pay for the whole calculation twice.
+    #[test]
+    fn walking_the_last_two_stages_reuses_the_plan_instead_of_recomputing_it() {
+        let mut tui = tui();
+        tui.open(Some(Screen::Sources));
+        assert!(tui.plan.is_some(), "LOT-001/corn should plan: {}", tui.message);
+
+        // A sentinel only a recalculation can erase.
+        tui.plan.as_mut().expect("a plan").mineralization_factor = -1.0;
+        press(&mut tui, KeyCode::Char('l'));
+        assert_eq!(tui.screen, Screen::Plan);
+        assert_eq!(
+            tui.plan.as_ref().expect("a plan").mineralization_factor,
+            -1.0,
+            "stage 5 asked the question stage 4 had already answered"
+        );
+
+        // Enter on the last stage still means "run it again".
+        press(&mut tui, KeyCode::Enter);
+        assert_ne!(tui.plan.as_ref().expect("a plan").mineralization_factor, -1.0);
+
+        // And a different question is a different plan.
+        tui.plan.as_mut().expect("a plan").mineralization_factor = -1.0;
+        tui.crop_override = Some("wheat".to_string());
+        tui.yield_input = "6".to_string();
+        tui.open(Some(Screen::Plan));
+        assert_ne!(
+            tui.plan.as_ref().expect("a plan").mineralization_factor,
+            -1.0,
+            "a changed crop must not be answered from the last crop's plan"
+        );
+    }
+
+    /// A gap in the panel has to be named on stage ① — where it can still
+    /// be filled — and not on stage ④, two stages after the reader walked
+    /// past it. Informative, never blocking.
+    #[test]
+    fn stage_one_says_what_the_lab_panel_is_missing() {
+        let sandbox = Sandbox::new("panel_gaps");
+        let mut tui = sandbox.tui();
+
+        tui.open(Some(Screen::NewLot));
+        fill(&mut tui, "form_field_id", "LOT-901");
+        fill(&mut tui, "form_texture", "loam");
+        fill(&mut tui, "form_irrigation", "rainfed");
+        fill(&mut tui, "form_om", "3.2");
+        fill(&mut tui, "form_ph", "5.4");
+        fill(&mut tui, "form_cec", "12");
+        fill(&mut tui, "form_bulk_density", "1.3");
+        fill(&mut tui, "form_arable_depth", "0.2");
+        save_form(&mut tui);
+        assert!(!tui.is_error, "the lot should have saved: {}", tui.message);
+
+        let new_lot = tui.lots.iter().position(|lot| lot.field_id == "LOT-901").expect("new lot listed");
+        let plan_this_lot = |tui: &mut Tui| {
+            tui.lot_idx = new_lot;
+            tui.crop_override = Some("wheat".to_string());
+            tui.yield_input = "6".to_string();
+        };
+
+        // One reading, and it is not Al: the plan will run without a liming
+        // recommendation and stage ① is where that can still be fixed.
+        plan_this_lot(&mut tui);
+        tui.open(Some(Screen::SampleBatch));
+        tui.batch = Some(SampleBatch::new("LOT-901".to_string()));
+        set_cell(&mut tui, "P", BATCH_COL_VALUE, "12");
+        set_cell(&mut tui, "P", 3, "Olsen");
+        tui.commit_batch();
+        assert!(!tui.is_error, "the panel should have saved: {}", tui.message);
+
+        plan_this_lot(&mut tui);
+        tui.open(Some(Screen::Soil));
+        assert!(tui.inspection.is_some(), "LOT-901 should inspect: {}", tui.message);
+        assert!(tui.is_warning && !tui.is_error, "a missing reading is information, not a refusal");
+        assert_eq!(tui.message, tui.i18n.t("warn_no_al_test"));
+
+        // With Al on file but read as zero, the warning is the other one —
+        // and it names the nutrient it is about.
+        tui.open(Some(Screen::SampleBatch));
+        tui.batch = Some(SampleBatch::new("LOT-901".to_string()));
+        set_cell(&mut tui, "Al", BATCH_COL_VALUE, "0");
+        set_cell(&mut tui, "Al", 3, "KCl");
+        tui.commit_batch();
+        assert!(!tui.is_error, "{}", tui.message);
+
+        plan_this_lot(&mut tui);
+        tui.open(Some(Screen::Soil));
+        assert!(tui.is_warning && !tui.is_error, "{}", tui.message);
+        assert!(tui.message.starts_with(tui.i18n.t("warn_zero_nutrient")), "{}", tui.message);
+        assert!(tui.message.contains("Al"), "the warning has to name the reading: {}", tui.message);
+    }
+
     #[test]
     fn step_saturates_at_both_ends() {
         assert_eq!(step(0, 3, -1), 0);
@@ -1968,6 +2556,65 @@ mod tests {
 
         tui.open(Some(Screen::Plan));
         assert!(tui.plan.is_some(), "wheat should now plan: {}", tui.message);
+    }
+
+    /// The screenshot bug: pick a crop this lot has no goal for, decline
+    /// to type one, walk on — and stage ④ answered with the repository's
+    /// own words, `no yield target for field_id=… crop_id=…`, on a screen
+    /// where nothing can be done about it.
+    #[test]
+    fn a_crop_with_no_goal_is_refused_in_the_apps_own_words_not_the_repositorys() {
+        let mut tui = tui();
+        tui.open(Some(Screen::Crops));
+        press(&mut tui, KeyCode::Char('/'));
+        for c in "wheat".chars() {
+            press(&mut tui, KeyCode::Char(c));
+        }
+        press(&mut tui, KeyCode::Enter); // leave the filter
+        press(&mut tui, KeyCode::Enter); // pick the crop
+        assert!(tui.editing_yield, "a crop with no curated goal asks for one");
+
+        // Declining is allowed — and used to poison every stage after it.
+        press(&mut tui, KeyCode::Esc);
+        assert!(!tui.editing_yield);
+        assert!(tui.scenario().is_none(), "a pair with no goal is not a scenario");
+
+        for stage in [Screen::Sources, Screen::Plan, Screen::Soil] {
+            tui.open(Some(stage));
+            assert!(tui.is_error, "{stage:?} planned without a goal");
+            assert_eq!(
+                tui.message,
+                tui.i18n.t("err_no_yield_goal"),
+                "{stage:?} answered with the repository's words instead of the app's"
+            );
+            assert!(!tui.message.contains("field_id"), "and leaked a column name at the reader");
+        }
+
+        // Typing one is all it ever needed.
+        tui.yield_input = "5".to_string();
+        tui.open(Some(Screen::Plan));
+        assert!(tui.plan.is_some(), "{}", tui.message);
+    }
+
+    /// The pair the last session ended on is restored; a pair that cannot
+    /// plan is not. The typed goal is deliberately not stored, so a crop
+    /// without a curated one would come back unusable.
+    #[test]
+    fn a_stored_crop_is_only_restored_onto_a_lot_that_has_a_goal_for_it() {
+        let stored = |lot: &str, crop: &str| tui_settings::TuiSettings {
+            lot: lot.to_string(),
+            crop: crop.to_string(),
+            ..tui_settings::TuiSettings::default()
+        };
+
+        let restored = Tui::new(bootstrap::build_app_from_repo_data(), stored("LOT-001", "corn"), None);
+        assert_eq!(restored.crop_override.as_deref(), Some("corn"), "LOT-001/corn is curated");
+        assert!(restored.scenario().is_some());
+
+        // LOT-002 is a coffee lot: corn on it is a pair with no goal.
+        let impossible = Tui::new(bootstrap::build_app_from_repo_data(), stored("LOT-002", "corn"), None);
+        assert!(impossible.crop_override.is_none(), "a pair that cannot plan must not be restored");
+        assert!(impossible.scenario().is_some(), "and the lot's own crop still plans");
     }
 
     #[test]

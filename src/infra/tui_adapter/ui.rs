@@ -347,6 +347,7 @@ fn screen_label(screen: Screen) -> &'static str {
         Screen::NewLot => "form_new_lot_title",
         Screen::EditLot => "form_edit_lot_title",
         Screen::NewSample => "form_new_sample_title",
+        Screen::SampleBatch => "form_batch_title",
         Screen::Import => "form_import_title",
         Screen::Settings => "settings_title",
         _ => "module_plan",
@@ -365,6 +366,7 @@ fn statusline(frame: &mut Frame, area: Rect, tui: &Tui) {
         Screen::Sources => "hint_sources",
         Screen::Plan => "hint_plan",
         Screen::NewLot | Screen::EditLot | Screen::NewSample | Screen::Import => "hint_form",
+        Screen::SampleBatch => "hint_batch",
         Screen::Settings => "hint_settings",
     };
     statusline_with(frame, area, tui, hint);
@@ -385,13 +387,19 @@ fn statusline_with(frame: &mut Frame, area: Rect, tui: &Tui, hint: &str) {
     frame.render_widget(block, area);
 
     // The dot carries the severity, so the message itself stays readable.
+    // Three severities, not two: a warning is neither a failure nor a
+    // confirmation, and painting it as either misreports what happened.
+    let (dot, text) = if tui.is_error {
+        (tui.theme.error(), tui.theme.error())
+    } else if tui.is_warning {
+        (tui.theme.warn(), tui.theme.warn())
+    } else {
+        (tui.theme.ok(), tui.theme.strong())
+    };
     let mut right = vec![
         separator(tui),
-        Span::styled(" ● ", if tui.is_error { tui.theme.error() } else { tui.theme.ok() }),
-        Span::styled(
-            format!("{} ", tui.message),
-            if tui.is_error { tui.theme.error() } else { tui.theme.strong() },
-        ),
+        Span::styled(" ● ", dot),
+        Span::styled(format!("{} ", tui.message), text),
     ];
     // The version is decoration and goes before anything else does: it
     // only appears once the whole left run, keybindings included, has
@@ -615,6 +623,7 @@ fn workspace(frame: &mut Frame, area: Rect, tui: &Tui) {
     if stage_index(tui.screen).is_none() {
         return match tui.screen {
             Screen::NewLot | Screen::EditLot | Screen::NewSample | Screen::Import => form(frame, area, tui),
+            Screen::SampleBatch => sample_batch(frame, area, tui),
             Screen::Settings => settings(frame, area, tui),
             _ => launcher(frame, area, tui),
         };
@@ -764,6 +773,78 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
     frame.render_widget(
         Paragraph::new(Line::styled(format!(" {hint}"), tui.theme.muted())).wrap(Wrap { trim: true }),
         hint_area,
+    );
+}
+
+/// A whole lab panel as one table: a row per nutrient, filled in any
+/// order, written in one pass. The form beside it still exists for the
+/// single reading that arrives on its own.
+///
+/// The cursor is a *cell*, and ratatui highlights rows — so the row keeps
+/// the marker every other list in the app uses and the cell carries the
+/// selection style itself.
+fn sample_batch(frame: &mut Frame, area: Rect, tui: &Tui) {
+    let block = panel(tui.i18n.t("form_batch_title").to_string(), !tui.focus_modules, tui);
+    let Some(batch) = &tui.batch else {
+        return frame.render_widget(block, area);
+    };
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows: Vec<Row> = batch
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, cells)| {
+            Row::new(
+                cells
+                    .iter()
+                    .enumerate()
+                    .map(|(column, text)| {
+                        let here = index == batch.row && column == batch.col;
+                        let cursor = if here && batch.editing { "█" } else { "" };
+                        let style = match (column, here) {
+                            // Column 0 names the row rather than holding a
+                            // value, so it never wears the cell cursor.
+                            (0, _) => tui.theme.accent(),
+                            (_, true) => tui.theme.selected(),
+                            _ => tui.theme.base(),
+                        };
+                        Cell::from(Span::styled(format!("{text}{cursor}"), style))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(6),
+            Constraint::Length(10),
+            Constraint::Length(14),
+            Constraint::Min(10),
+            Constraint::Length(10),
+        ],
+    )
+    .header(header(tui, &super::BATCH_COLUMNS))
+    .highlight_symbol(Span::styled(MARKER, tui.theme.accent()));
+
+    let [head, table_area, hint] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(0), Constraint::Length(2)]).areas(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{:<12}", tui.i18n.t("st_lot")), tui.theme.muted()),
+            Span::styled(batch.field_id.clone(), tui.theme.strong()),
+            Span::styled(format!("   {}", tui.i18n.t("batch_note")), tui.theme.muted()),
+        ])),
+        head,
+    );
+    frame.render_stateful_widget(table, table_area, &mut TableState::default().with_selected(Some(batch.row)));
+    frame.render_widget(
+        Paragraph::new(Line::styled(format!(" {}", tui.i18n.t("batch_hint")), tui.theme.muted()))
+            .wrap(Wrap { trim: true }),
+        hint,
     );
 }
 
@@ -1121,7 +1202,7 @@ fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
         }
     }
 
-    frame.render_widget(Paragraph::new(lines).scroll((tui.scroll, 0)), area);
+    frame.render_widget(Paragraph::new(scrolled(tui, lines, area)).scroll((tui.scroll, 0)), area);
 }
 
 /// Column headings for the readings, laid out by hand rather than as a
@@ -1280,13 +1361,14 @@ fn target(frame: &mut Frame, area: Rect, tui: &Tui) {
             Span::styled(on(super::TARGET_ROW_GOAL), tui.theme.accent()),
             Span::styled(format!("{shown}{cursor}"), tui.theme.title()),
             Span::styled(format!(" {}", super::YIELD_UNIT), tui.theme.muted()),
-            Span::styled(
-                format!(
-                    "   ({})",
-                    tui.i18n.t(if typed.is_some() { "target_typed" } else { "target_curated" })
-                ),
-                tui.theme.muted(),
-            ),
+            // Named for what it is, including when it is nothing: this pair
+            // has no curated goal and none was typed, so the plan cannot
+            // run — and this row is the only place that can be fixed.
+            match (typed.is_some(), curated.is_some()) {
+                (true, _) => Span::styled(format!("   ({})", tui.i18n.t("target_typed")), tui.theme.muted()),
+                (false, true) => Span::styled(format!("   ({})", tui.i18n.t("target_curated")), tui.theme.muted()),
+                (false, false) => Span::styled(format!("   {}", tui.i18n.t("target_no_goal")), tui.theme.warn()),
+            },
         ]),
     ];
 
@@ -1476,7 +1558,7 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
     let [table_area, notes] =
         Layout::vertical([Constraint::Length(table_height), Constraint::Min(0)]).areas(area);
     frame.render_widget(table, table_area);
-    frame.render_widget(Paragraph::new(lines).scroll((tui.scroll, 0)), notes);
+    frame.render_widget(Paragraph::new(scrolled(tui, lines, notes)).scroll((tui.scroll, 0)), notes);
 }
 
 fn strategy_label(strategy: FertilizationStrategy) -> &'static str {
@@ -1605,7 +1687,22 @@ fn plan(frame: &mut Frame, area: Rect, tui: &Tui) {
     let [table_area, note_area] =
         Layout::vertical([Constraint::Length(table_height), Constraint::Min(0)]).areas(area);
     frame.render_widget(table, table_area);
-    frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: true }).scroll((tui.scroll, 0)), note_area);
+    frame.render_widget(
+        Paragraph::new(scrolled(tui, notes, note_area)).wrap(Wrap { trim: true }).scroll((tui.scroll, 0)),
+        note_area,
+    );
+}
+
+/// Hands the page's own measurements back to the state, which is what lets
+/// `j` know where the page ends. The one thing this file writes.
+///
+/// ponytail: counts source lines, not wrapped ones, so a page whose notes
+/// wrap can still be scrolled a row or two short of its end. Measure the
+/// wrap the day a note is long enough for anyone to notice.
+fn scrolled<'a>(tui: &Tui, lines: Vec<Line<'a>>, area: Rect) -> Vec<Line<'a>> {
+    tui.content_height.set(lines.len() as u16);
+    tui.viewport_height.set(area.height);
+    lines
 }
 
 /// Warnings are the plan's own words about numbers it decided to show
@@ -1750,6 +1847,14 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
         ("?", "help_help"),
     ];
     match tui.screen {
+        // Both readings keys act on the lot under the cursor, so the
+        // overlay says whose reading it would be.
+        Screen::Dashboard => keys.insert(0, ("s · b", "help_sample_needs_lot")),
+        Screen::SampleBatch => {
+            keys.insert(0, ("Tab", "help_batch_cell"));
+            keys.insert(1, ("e", "help_batch_edit"));
+            keys.insert(2, ("Enter", "help_batch_save"));
+        }
         Screen::Crops => keys.insert(0, ("/", "help_filter")),
         Screen::Target => {
             keys.insert(0, ("h/l · ←/→", "help_step"));
@@ -1814,6 +1919,7 @@ fn screen_title_id(screen: Screen) -> &'static str {
         Screen::EditLot => "form_edit_lot_title",
         Screen::Import => "form_import_title",
         Screen::NewSample => "form_new_sample_title",
+        Screen::SampleBatch => "form_batch_title",
         Screen::Settings => "settings_title",
     }
 }
@@ -2006,10 +2112,12 @@ mod tests {
             Screen::Plan,
             Screen::NewLot,
             Screen::NewSample,
+            Screen::SampleBatch,
             Screen::Settings,
         ] {
             match screen {
                 Screen::NewLot | Screen::EditLot | Screen::NewSample | Screen::Import => tui.open_form(screen),
+                Screen::SampleBatch => tui.open_batch(),
                 _ => tui.screen = screen,
             }
             // 80x24 drops the status column; 130x40 shows all three. The
@@ -2067,6 +2175,50 @@ mod tests {
             out.contains(&tui.i18n.t("launch_sources_ready").to_string()),
             "shipped reference data means the sources report ready"
         );
+    }
+
+    /// The whole lab panel on screen at both densities: twelve rows, five
+    /// columns, and the cell cursor on it.
+    #[test]
+    fn batch_sample_entry_renders() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open_batch();
+        assert_eq!(tui.screen, Screen::SampleBatch, "{}", tui.message);
+
+        for (width, height) in [(80, 24), (130, 40)] {
+            let out = render(&tui, width, height);
+            assert!(
+                out.contains(&tui.i18n.t("form_batch_title").to_uppercase()),
+                "the table lost its frame at {width}x{height}"
+            );
+            assert!(out.contains("mg_per_kg"), "and its rows at {width}x{height}");
+            assert!(out.contains(&tui.i18n.t("lots").to_uppercase()), "and the lot column with them");
+        }
+    }
+
+    /// `j` past the last line used to keep scrolling into blank space and
+    /// need as many `k` to come back. The page ends where the frame that
+    /// drew it says it ends.
+    #[test]
+    fn plan_scrolling_stops_at_the_end_of_the_page() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open(Some(Screen::Plan));
+        assert!(tui.plan.is_some(), "LOT-001/corn should plan: {}", tui.message);
+
+        // Drawing is what measures the page, so a frame comes first.
+        render(&tui, 80, 24);
+        assert!(tui.viewport_height.get() > 0, "the frame has to report what it painted");
+        let last = tui.content_height.get().saturating_sub(tui.viewport_height.get());
+        for _ in 0..50 {
+            tui.move_selection(1);
+        }
+        assert!(tui.scroll <= last, "j walked {} rows past an {last}-row page", tui.scroll);
+
+        // And `k` still comes back to the top in one page's worth of presses.
+        for _ in 0..=last {
+            tui.move_selection(-1);
+        }
+        assert_eq!(tui.scroll, 0);
     }
 
     /// Everything the bar carries is useful except the version, which the
@@ -2172,8 +2324,10 @@ mod tests {
         assert!(small.contains(WORDMARK_SMALL[0]), "a small panel is what a mark is for");
         assert!(!small.contains(WORDMARK_MARK[0]), "and it is reached by standing the monogram down");
 
-        // Wide but short, which is the other way to be out of room.
-        let squat_wide = render(&tui, 150, 25);
+        // Wide but short, which is the other way to be out of room. One row
+        // taller than it used to be: the menu grew a verb, and the menu is
+        // what the banner competes with for the body.
+        let squat_wide = render(&tui, 150, 26);
         assert!(squat_wide.contains(WORDMARK_SMALL[0]), "height runs out before width does here");
 
         // The floor: too short for the mark, still room to say the name.

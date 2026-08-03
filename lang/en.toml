@@ -199,7 +199,7 @@ mode_filter = "FILTER"
 mode_help = "HELP"
 mode_yield = "YIELD"
 mode_edit = "EDIT"
-hint_dashboard = "j/k menu · h/l lot · Enter open · n c e s x i , keys · q quit · ? help"
+hint_dashboard = "j/k menu · h/l lot · Enter open · n c e x i , keys · s b readings on the lot · q quit"
 hint_crops = "/ filter · Enter pick crop · h/l or [/] stage · Esc back"
 hint_plan = "j/k scroll · h/l or [/] stage · Tab pane · Esc back · ? help"
 hint_inspect = "j/k scroll · h/l or [/] stage · Tab pane · Esc back · ? help"
@@ -264,3 +264,24 @@ action_settings = "Settings"
 msg_copy_lot = "copy of the lot — give it a new id"
 module_plan = "Fertilization"
 action_quit = "Quit"
+
+# the lab panel as a table (one visit, one whole report)
+action_batch = "Lab panel"
+form_batch_title = "Lab panel"
+batch_note = "fill the rows this report carries — the rest are ignored"
+batch_hint = "Tab cell · j/k row · e edit · h/l unit · Enter on the last cell saves · Esc discard"
+hint_batch = "Tab cell · j/k row · e edit · Enter on the last cell saves · Esc discard"
+msg_batch_open = "one row per nutrient — only the rows with a value are written"
+err_no_readings = "no reading to save: type a value on at least one row"
+help_batch_cell = "next cell in the row"
+help_batch_edit = "edit the cell under the cursor"
+help_batch_save = "on the last cell, save the whole table"
+help_sample_needs_lot = "add readings to the selected lot"
+
+# stage 1 warnings: what the panel is missing, said where it can still be filled
+warn_no_al_test = "no Al reading on file: this lot will plan without a liming recommendation"
+warn_zero_nutrient = "read as zero — below detection, or not measured:"
+
+# a (lot, crop) pair with no goal on either side
+err_no_yield_goal = "this lot has no yield goal for this crop: type one on the Goal stage"
+target_no_goal = "no goal for this crop — type one"
