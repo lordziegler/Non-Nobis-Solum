@@ -318,6 +318,12 @@ pub fn build_field_contexts(layout: &DataLayout) -> CsvFieldContextRepo {
     CsvFieldContextRepo::new(layout.curated("field_context.csv"))
 }
 
+/// The curated readings on their own, for a front-end that wants to show
+/// what a lot already carries — prefilling the lab panel is the case.
+pub fn build_soil_tests(layout: &DataLayout) -> CsvSoilTestsRepo {
+    CsvSoilTestsRepo::new(layout.curated("soil_tests.csv"))
+}
+
 /// Reads the curated lots, not the planning rows: a lot exists whether or
 /// not a crop is planned on it.
 pub fn build_list_lots(layout: &DataLayout) -> ListLots {

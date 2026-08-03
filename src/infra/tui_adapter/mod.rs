@@ -21,11 +21,12 @@ use crate::core::application::{
 };
 use crate::core::domain::{
     BlendSearchStrategy, Crop, DomainError, FertilityPlan, FertilizerRecommendationReport, FertilizerSource,
-    IrrigationSystem, Nutrient, NutrientDemandMode, Texture, YieldTarget,
+    IrrigationSystem, Nutrient, NutrientDemandMode, SoilTest, Texture, YieldTarget,
 };
 use crate::core::ports::{
     AgroclimaticRepository, FertilityCalculatorPort, FertilizerSourceRepository, FieldContextRepository,
     InspectScenarioPort, ListCropsPort, ListLotsPort, RecommendFertilizerProgramPort, RegisterLotPort,
+    SoilTestRepository,
 };
 use crate::infra::bootstrap::{self, App as Composition};
 use crate::infra::{csv_import, tui_settings, CachedAgroclimaticRepo, PrewarmedAgroclimaticRepo};
@@ -271,12 +272,24 @@ pub struct SampleBatch {
 }
 
 impl SampleBatch {
-    fn new(field_id: String) -> Self {
+    /// `existing` prefills a row from the lot's own last reading, so
+    /// reopening the panel shows what is already on file instead of asking
+    /// the cursor to walk a list that starts nowhere near it.
+    ///
+    /// Only a reading at the surface (`from_cm == 0`) is shown: that is the
+    /// only depth this table can write back, since `depth_from` is not one
+    /// of its columns. A deeper layer is left for the single-reading form.
+    fn new(field_id: String, existing: &[SoilTest]) -> Self {
         let rows = soil_test_nutrients()
             .into_iter()
-            .map(|nutrient| {
-                let unit = customary_unit(&nutrient).to_string();
-                [nutrient, String::new(), unit, String::new(), BATCH_DEFAULT_DEPTH_CM.to_string()]
+            .map(|nutrient| match existing.iter().find(|t| t.layer.from_cm == 0.0 && t.nutrient.to_string() == nutrient) {
+                Some(test) => {
+                    [nutrient, test.value.to_string(), test.unit.clone(), test.method.clone(), test.layer.to_cm.to_string()]
+                }
+                None => {
+                    let unit = customary_unit(&nutrient).to_string();
+                    [nutrient, String::new(), unit, String::new(), BATCH_DEFAULT_DEPTH_CM.to_string()]
+                }
             })
             .collect();
         Self { field_id, rows, row: 0, col: BATCH_FIRST_CELL, editing: false }
@@ -1371,7 +1384,14 @@ impl Tui {
         let Some(lot) = self.selected_lot() else {
             return self.fail_key("err_no_lot");
         };
-        self.batch = Some(SampleBatch::new(lot.field_id.clone()));
+        let field_id = lot.field_id.clone();
+        // A fresh lot has no `soil_tests.csv` row at all, which is not an
+        // error to surface — it is the same "nothing yet" an empty table
+        // already means.
+        let existing = bootstrap::build_soil_tests(&self.cfg.layout())
+            .get_tests_by_sample_id(&field_id)
+            .unwrap_or_default();
+        self.batch = Some(SampleBatch::new(field_id, &existing));
         self.enter(Screen::SampleBatch);
         self.info("msg_batch_open");
     }
@@ -2403,13 +2423,20 @@ mod tests {
     }
 
     /// Moves the cell cursor and types into it through real key handling.
+    /// Backspaces out whatever the cell already carries first — a reopened
+    /// panel prefills from the lot's last reading, and `e` edits in place
+    /// rather than clearing, exactly like every other field in the app.
     fn set_cell(tui: &mut Tui, nutrient: &str, column: usize, value: &str) {
-        {
+        let existing_len = {
             let batch = tui.batch.as_mut().expect("a table is on screen");
             batch.row = batch.rows.iter().position(|row| row[0] == nutrient).expect("a row per nutrient");
             batch.col = column;
-        }
+            batch.rows[batch.row][column].chars().count()
+        };
         press(tui, KeyCode::Char('e'));
+        for _ in 0..existing_len {
+            press(tui, KeyCode::Backspace);
+        }
         for c in value.chars() {
             press(tui, KeyCode::Char(c));
         }
@@ -2494,8 +2521,11 @@ mod tests {
     #[test]
     fn an_empty_method_cell_offers_the_extraction_that_nutrient_is_read_with() {
         let mut tui = tui();
-        tui.screen = Screen::Dashboard;
-        press(&mut tui, KeyCode::Char('b'));
+        // Built directly rather than through `b`: this is about the default
+        // an empty cell offers, not about what a lot's own history prefills
+        // — see `a_reopened_panel_shows_what_the_lot_already_carries`.
+        tui.batch = Some(SampleBatch::new("TEST".to_string(), &[]));
+        tui.screen = Screen::SampleBatch;
 
         for (nutrient, expected) in [("P", "Bray_II"), ("Ca", "AcONH4_1N_pH7"), ("Al", "KCl_1N"), ("B", "hot_water")] {
             {
@@ -2606,11 +2636,28 @@ mod tests {
 
     /// A lab panel is one visit: fill the rows the report carries, leave
     /// the rest, write once.
+    ///
+    /// A fresh lot, not one of the fixture's — those already carry a full
+    /// panel, which is exactly the case [`a_reopened_panel_shows_what_the_lot_already_carries`]
+    /// covers.
     #[test]
     fn the_batch_table_writes_only_the_rows_that_carry_a_reading() {
         let sandbox = Sandbox::new("batch");
         let mut tui = sandbox.tui();
+        tui.open(Some(Screen::NewLot));
+        fill(&mut tui, "form_field_id", "LOT-BLANK");
+        fill(&mut tui, "form_texture", "loam");
+        fill(&mut tui, "form_irrigation", "rainfed");
+        fill(&mut tui, "form_om", "3.2");
+        fill(&mut tui, "form_ph", "5.4");
+        fill(&mut tui, "form_cec", "12");
+        fill(&mut tui, "form_bulk_density", "1.3");
+        fill(&mut tui, "form_arable_depth", "0.2");
+        save_form(&mut tui);
+        assert!(!tui.is_error, "the lot should have saved: {}", tui.message);
+        tui.lot_idx = tui.lots.iter().position(|lot| lot.field_id == "LOT-BLANK").expect("new lot listed");
         tui.screen = Screen::Dashboard;
+
         let lot = tui.selected_lot().expect("a lot").field_id.clone();
         let curated = sandbox.root.join("data/curated/soil_tests.csv");
         let rows_before = std::fs::read_to_string(&curated)
@@ -2663,16 +2710,44 @@ mod tests {
         assert!(!tui.is_error, "the panel should have saved: {}", tui.message);
         assert_eq!(tui.screen, Screen::Dashboard, "a committed table is done");
 
-        // The two filled rows supersede the readings already on file for
-        // the same nutrients; the ten empty ones add nothing.
+        // Only the two filled rows land; the ten empty ones add nothing.
         let written = std::fs::read_to_string(sandbox.root.join("data/curated/soil_tests.csv")).expect("curated file");
         let ours: Vec<&str> = written.lines().filter(|line| line.starts_with(&format!("{lot},"))).collect();
-        assert_eq!(ours.len(), rows_before, "an untouched row must not become a reading:\n{written}");
+        assert_eq!(ours.len(), rows_before + 2, "an untouched row must not become a reading:\n{written}");
         assert!(ours.iter().any(|line| line.contains(",P,14,mg_per_kg,Olsen,")), "{ours:?}");
         assert!(
             ours.iter().any(|line| line.contains(",K,0.4,cmolc_per_kg,NH4OAc,")),
             "the unit on the cell has to survive the write: {ours:?}"
         );
+    }
+
+    /// Reopening the panel on a lot that already has a reading has to show
+    /// it — not a blank row next to a cursor with nothing to land on. This
+    /// was the actual bug behind "the method selector doesn't work": the
+    /// panel always opened empty, so changing an already-answered
+    /// nutrient's method looked broken because there was nothing on screen
+    /// to say what it currently was.
+    #[test]
+    fn a_reopened_panel_shows_what_the_lot_already_carries() {
+        let sandbox = Sandbox::new("batch_prefill");
+        let mut tui = sandbox.tui();
+        tui.screen = Screen::Dashboard;
+        // The fixture's LOT-001 already carries a phosphorus reading.
+        let field_id = tui.selected_lot().expect("a lot").field_id.clone();
+        assert_eq!(field_id, "LOT-001");
+
+        press(&mut tui, KeyCode::Char('b'));
+        let row = |tui: &Tui, nutrient: &str| {
+            tui.batch.as_ref().expect("a table").rows.iter().find(|row| row[0] == nutrient).expect("a row").clone()
+        };
+
+        assert_eq!(row(&tui, "P"), ["P", "18", "mg_per_kg", "Olsen", "20"], "the lot's own reading, not a blank one");
+        assert_eq!(row(&tui, "Al")[BATCH_COL_VALUE], "", "a nutrient the lot has never reported stays blank");
+
+        // The prefilled method still walks like any other: `e` replaces it
+        // rather than appending to it.
+        set_cell(&mut tui, "P", BATCH_COL_METHOD, "Mehlich");
+        assert_eq!(row(&tui, "P")[BATCH_COL_METHOD], "Mehlich");
     }
 
     /// Esc is the way out of the table, and nothing typed into it is
@@ -2759,7 +2834,7 @@ mod tests {
         // recommendation and stage ① is where that can still be fixed.
         plan_this_lot(&mut tui);
         tui.open(Some(Screen::SampleBatch));
-        tui.batch = Some(SampleBatch::new("LOT-901".to_string()));
+        tui.batch = Some(SampleBatch::new("LOT-901".to_string(), &[]));
         set_cell(&mut tui, "P", BATCH_COL_VALUE, "12");
         set_cell(&mut tui, "P", 3, "Olsen");
         tui.commit_batch();
@@ -2774,7 +2849,7 @@ mod tests {
         // With Al on file but read as zero, the warning is the other one —
         // and it names the nutrient it is about.
         tui.open(Some(Screen::SampleBatch));
-        tui.batch = Some(SampleBatch::new("LOT-901".to_string()));
+        tui.batch = Some(SampleBatch::new("LOT-901".to_string(), &[]));
         set_cell(&mut tui, "Al", BATCH_COL_VALUE, "0");
         set_cell(&mut tui, "Al", 3, "KCl");
         tui.commit_batch();
