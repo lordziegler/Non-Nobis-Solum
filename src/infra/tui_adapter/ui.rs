@@ -10,10 +10,13 @@ use ratatui::Frame;
 
 use super::i18n::Language;
 use super::theme;
+use super::viz;
 use super::{stage_index, Screen, Tui, BAG_WEIGHTS_KG, LOT_ACTIONS, SETTINGS, STAGES};
-use crate::core::application::LotSummary;
-use crate::core::domain::{FertilityPlan, FertilizationStrategy, Nutrient, NutrientDemandMode, SoilStatus};
-use crate::infra::report_renderer;
+use crate::core::application::{LotSummary, ScenarioInspection};
+use crate::core::domain::{
+    FertilityPlan, FertilizationStrategy, FertilizerRecommendationReport, Nutrient, NutrientDemandMode, SoilStatus,
+    SourceRole,
+};
 
 /// Below this the status column is dropped rather than squeezed, so an
 /// 80x24 terminal keeps modules + workspace intact.
@@ -220,6 +223,9 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
         }
     }
 
+    if tui.inspecting.is_some() {
+        inspector_overlay(frame, tui);
+    }
     if tui.picker.is_some() {
         picker_overlay(frame, tui);
     }
@@ -232,7 +238,7 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
 
 /// Rounded on every panel; focus shows as an accent border and lit title,
 /// not a heavier line, so the mosaic doesn't jump as focus moves.
-fn panel<'a>(title: String, focused: bool, tui: &Tui) -> Block<'a> {
+fn panel<'a>(title: &str, focused: bool, tui: &Tui) -> Block<'a> {
     let (border, title_style) = if focused {
         (tui.theme.accent(), tui.theme.title())
     } else {
@@ -518,7 +524,7 @@ fn lots_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
         items
     };
 
-    let block = panel(tui.i18n.t("lots").to_string(), tui.focus_modules, tui);
+    let block = panel(tui.i18n.t("lots"), tui.focus_modules, tui);
     let body = block.inner(area);
     frame.render_widget(block, area);
 
@@ -575,14 +581,17 @@ fn status_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
         for entry in &plan.nutrient_results {
             if let Some(dose) = &entry.dose {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{:<18}", dose.source_name), tui.theme.muted()),
+                    Span::styled(
+                        format!("{} ", clip(&product_name(tui, &dose.source_id, &dose.source_name), STATUS_LABEL)),
+                        tui.theme.muted(),
+                    ),
                     Span::styled(format!("{:.0} kg", dose.kg_product_per_ha), tui.theme.strong()),
                 ]));
             }
         }
         if let Some(liming) = &plan.liming {
             lines.push(Line::from(vec![
-                Span::styled(format!("{:<18}", tui.i18n.t("st_liming")), tui.theme.warn()),
+                Span::styled(format!("{} ", clip(tui.i18n.t("st_liming"), STATUS_LABEL)), tui.theme.warn()),
                 Span::styled(format!("{:.1} t/ha", liming.recommended_t_ha), tui.theme.strong()),
             ]));
             lines.extend(saturation_bar(
@@ -598,8 +607,8 @@ fn status_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
     if let Some(inspection) = &tui.inspection {
         let context = &inspection.field_context;
         lines.push(Line::raw(""));
-        lines.push(field(tui, "st_texture", context.texture.to_string()));
-        lines.push(field(tui, "st_irrigation", context.irrigation_system.to_string()));
+        lines.push(field(tui, "st_texture", tui.i18n.term(&context.texture.to_string())));
+        lines.push(field(tui, "st_irrigation", tui.i18n.term(&context.irrigation_system.to_string())));
         lines.push(field(tui, "st_ph", format!("{:.1}", context.ph)));
         lines.push(field(tui, "st_om", format!("{:.1} %", context.organic_matter_percent)));
         lines.push(field(tui, "st_cec", format!("{:.1}", context.cec_cmolc_kg)));
@@ -610,7 +619,7 @@ fn status_pane(frame: &mut Frame, area: Rect, tui: &Tui) {
     lines.push(Line::styled(format!("{}:", tui.i18n.t("st_curated")), tui.theme.muted()));
     lines.push(Line::styled(tui.cfg.curated_dir().display().to_string(), tui.theme.muted()));
 
-    let block = panel(tui.i18n.t("system_status").to_string(), false, tui);
+    let block = panel(tui.i18n.t("system_status"), false, tui);
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: true }), area);
 }
 
@@ -646,7 +655,7 @@ fn workspace(frame: &mut Frame, area: Rect, tui: &Tui) {
     }
 
     let title = format!("{} · {}", tui.i18n.t("workspace"), screen_title(tui));
-    let block = panel(title, !tui.focus_modules, tui);
+    let block = panel(&title, !tui.focus_modules, tui);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -723,7 +732,7 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
         Screen::Import => "form_import_title",
         _ => "form_new_lot_title",
     };
-    let block = panel(tui.i18n.t(title).to_string(), !tui.focus_modules, tui);
+    let block = panel(tui.i18n.t(title), !tui.focus_modules, tui);
     let Some(form) = &tui.form else {
         return frame.render_widget(block, area);
     };
@@ -799,7 +808,19 @@ fn form(frame: &mut Frame, area: Rect, tui: &Tui) {
 ///
 /// Sized to the 80-column terminal, where the workspace has about 54 to
 /// give: the four fixed columns take 40 and the method keeps the rest.
-const BATCH_WIDTHS: [u16; 5] = [6, 10, 14, 10, 10];
+/// `unit` carries two more than its longest value (`cmolc_per_kg`) for the
+/// brackets that mark it pickable, taken off `value`, which never needs ten
+/// for a lab figure.
+const BATCH_WIDTHS: [u16; 5] = [6, 8, 16, 10, 10];
+
+/// Wrapped around a cell `h`/`l` cycles a list on.
+///
+/// Without them a picked cell and a typed one look identical, and the
+/// method column reads as free text somebody has to know the spelling of —
+/// which is exactly the guess this table exists to avoid. The pad sits
+/// inside them, so the pair also shows how far the cell reaches.
+const CYCLE_LEFT: &str = "‹";
+const CYCLE_RIGHT: &str = "›";
 
 /// A whole lab panel as one table: a row per nutrient, filled in any
 /// order, written in one pass. The form beside it still exists for the
@@ -809,7 +830,7 @@ const BATCH_WIDTHS: [u16; 5] = [6, 10, 14, 10, 10];
 /// the marker every other list in the app uses and the cell carries the
 /// selection style itself.
 fn sample_batch(frame: &mut Frame, area: Rect, tui: &Tui) {
-    let block = panel(tui.i18n.t("form_batch_title").to_string(), !tui.focus_modules, tui);
+    let block = panel(tui.i18n.t("form_batch_title"), !tui.focus_modules, tui);
     let Some(batch) = &tui.batch else {
         return frame.render_widget(block, area);
     };
@@ -835,20 +856,34 @@ fn sample_batch(frame: &mut Frame, area: Rect, tui: &Tui) {
                             _ => tui.theme.base(),
                         };
                         let editing = here && batch.editing;
+                        // Asked of the batch itself, so a cell is bracketed
+                        // exactly when `cycle` has a list for it.
+                        let cycles = !batch.options_at(index, column).is_empty();
+                        let chrome = if cycles { CYCLE_LEFT.chars().count() + CYCLE_RIGHT.chars().count() } else { 0 };
                         // Padded to its column, because reverse video on a
                         // zero-length span paints nothing: `value` and
                         // `method` start empty, so the cursor was invisible
                         // on exactly the two cells you go there to fill,
                         // while `unit` and `depth` — never empty — lit up.
-                        let filled = text.chars().count() + usize::from(editing);
+                        let filled = text.chars().count() + usize::from(editing) + chrome;
                         let pad = " ".repeat((BATCH_WIDTHS[column] as usize).saturating_sub(filled));
-                        Cell::from(Line::from(vec![
-                            Span::styled(text.clone(), style),
-                            // Between the text and the padding, so it sits
-                            // where the next character will land.
-                            caret(tui, editing),
-                            Span::styled(pad, style),
-                        ]))
+                        // Lit on the cell the cursor is on, chrome
+                        // everywhere else: the affordance is always there
+                        // to be read, and only shouts where it can be used.
+                        let arrow = if here { tui.theme.accent() } else { tui.theme.muted() };
+                        let mut spans = Vec::with_capacity(5);
+                        if cycles {
+                            spans.push(Span::styled(CYCLE_LEFT, arrow));
+                        }
+                        spans.push(Span::styled(text.clone(), style));
+                        // Between the text and the padding, so it sits
+                        // where the next character will land.
+                        spans.push(caret(tui, editing));
+                        spans.push(Span::styled(pad, style));
+                        if cycles {
+                            spans.push(Span::styled(CYCLE_RIGHT, arrow));
+                        }
+                        Cell::from(Line::from(spans))
                     })
                     .collect::<Vec<_>>(),
             )
@@ -954,13 +989,19 @@ fn menu_row(
     };
     let badge = badge.map(|id| tui.i18n.t(id).to_uppercase()).unwrap_or_default();
     let badge_width = if badge.is_empty() { 0 } else { badge.chars().count() + 2 };
-    let gap = (MENU_WIDTH - MENU_CHROME).saturating_sub(label.chars().count() + badge_width);
+    // A label with no room left ran past the pane and swallowed the key
+    // hint at the end of its own row — `Panel de laboratoriob`. Bounded
+    // here rather than in the bundle: any translation can be longer than
+    // the English it was written from.
+    let room = (MENU_WIDTH - MENU_CHROME).saturating_sub(badge_width);
+    let label = clip(label, room);
+    let gap = room - label.chars().count();
 
     let mut spans = vec![
         Span::styled(if selected { MARKER } else { " " }, tui.theme.accent()),
         Span::styled(format!(" {glyph} "), glyph_style),
     ];
-    spans.extend(mnemonic_in(tui, label, key, label_style, selected));
+    spans.extend(mnemonic_in(tui, &label, key, label_style, selected));
     spans.push(Span::styled(" ".repeat(gap), row));
     if !badge.is_empty() {
         let role = if selected { tui.theme.accent } else { tui.theme.label };
@@ -1000,10 +1041,10 @@ fn mnemonic_in(tui: &Tui, label: &str, key: Option<char>, base: Style, selected:
 fn readiness(tui: &Tui) -> Line<'static> {
     let dot = Span::styled("◷ ", tui.theme.muted());
     let sep = Span::styled(" · ", tui.theme.muted());
-    let (sources_id, sources_style) = if !tui.sources.is_empty() {
-        ("launch_sources_ready", tui.theme.ok())
-    } else {
+    let (sources_id, sources_style) = if tui.sources.is_empty() {
         ("launch_sources_missing", tui.theme.error())
+    } else {
+        ("launch_sources_ready", tui.theme.ok())
     };
     let (climate_id, climate_style) = if tui.climate.is_some() {
         ("launch_climate_on", tui.theme.ok())
@@ -1115,6 +1156,10 @@ fn pick_wordmark(inner: Rect, reserved: u16) -> Option<&'static [&'static str]> 
 /// `SoilQualityAssessment` is the whole point of this stage and nothing
 /// else in the TUI showed it. Everything below the readings is the old
 /// inspect screen, unchanged.
+// Laying out one screen top to bottom. The blocks share the running `y`
+// cursor and the theme, so splitting them into helpers would thread both
+// through every call for no reader's benefit.
+#[allow(clippy::too_many_lines)]
 fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
     let Some(inspection) = &tui.inspection else {
         return frame.render_widget(empty(tui, "no_inspection"), area);
@@ -1123,7 +1168,7 @@ fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
     let quality = &inspection.soil_quality;
 
     let zone = match quality.climate_zone {
-        Some(zone) => Span::styled(zone.to_string(), tui.theme.strong()),
+        Some(zone) => Span::styled(tui.i18n.term(&zone.to_string()), tui.theme.strong()),
         None => Span::styled(tui.i18n.t("soil_no_zone").to_string(), tui.theme.muted()),
     };
     // Whether the efficiency grid covers this lot at all. A texture it has
@@ -1139,7 +1184,12 @@ fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
         Line::from(vec![
             Span::styled(format!("{} ", context.field_id), tui.theme.title()),
             Span::styled(
-                format!("· {} · {} · {}", context.texture, context.irrigation_system, context.region),
+                format!(
+                    "· {} · {} · {}",
+                    tui.i18n.term(&context.texture.to_string()),
+                    tui.i18n.term(&context.irrigation_system.to_string()),
+                    context.region
+                ),
                 tui.theme.muted(),
             ),
         ]),
@@ -1160,8 +1210,8 @@ fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
         lines.push(Line::raw(""));
         lines.push(Line::styled(tui.i18n.t(title).to_string(), tui.theme.title()));
         lines.push(reading_header(tui));
-        for reading in readings.iter() {
-            lines.push(reading_row(tui, reading));
+        for reading in readings {
+            lines.push(reading_row(tui, reading, area.width));
         }
     }
 
@@ -1181,77 +1231,119 @@ fn soil(frame: &mut Frame, area: Rect, tui: &Tui) {
 
     lines.push(Line::raw(""));
     lines.push(Line::styled(tui.i18n.t("inspect_provenance").to_string(), tui.theme.title()));
-    for entry in &inspection.provenance {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {:<4}", entry.nutrient.to_string()), tui.theme.accent()),
-            Span::raw(" "),
-            soil_status_span(tui, planned_status(tui, &entry.nutrient.to_string())),
-        ]));
-        match &entry.removal_reference {
-            Some(removal) => {
-                // A dash where the source table prints one: the two bases
-                // are shown apart because filling either from the other is
-                // the transcription error the two-column schema removed.
-                let basis = |value: Option<f64>| value.map_or_else(|| "-".to_string(), |v| format!("{v}"));
-                lines.push(Line::styled(
-                    format!(
-                        "      {} extr {} / abs {} kg/{} · {} {} · {} {}",
-                        tui.i18n.t("inspect_removal"),
-                        basis(removal.extraction_kg_per_unit),
-                        basis(removal.absorption_kg_per_unit),
-                        removal.harvested_organ,
-                        tui.i18n.t("inspect_source"),
-                        removal.source,
-                        tui.i18n.t("inspect_year"),
-                        removal.year
-                    ),
-                    tui.theme.muted(),
-                ))
-            }
-            None => lines.push(Line::styled(
-                format!("      {}", tui.i18n.t("inspect_no_removal")),
-                tui.theme.warn(),
-            )),
-        }
-        if let Some((min, max)) = entry.efficiency_range {
-            lines.push(Line::styled(
-                format!("      {} {:.0}%-{:.0}%", tui.i18n.t("inspect_efficiency"), min * 100.0, max * 100.0),
-                tui.theme.muted(),
-            ));
-        }
-        if let Some(level) = &entry.critical_level {
-            lines.push(Line::styled(
-                // The unit belongs beside the thresholds, exactly as it
-                // does on the soil-test rows a few lines above: a K figure
-                // of 0.3 is adequate in cmolc/kg and destitute in mg/kg,
-                // and the reader has no other way to tell which is meant.
-                format!(
-                    "      {} {} / {} / {} {} [{}] · {} {} ({})",
-                    tui.i18n.t("inspect_critical"),
-                    level.low_threshold,
-                    level.medium_threshold,
-                    level.high_threshold,
-                    level.unit,
-                    level.extraction_method,
-                    tui.i18n.t("inspect_source"),
-                    level.source,
-                    level.year
-                ),
-                tui.theme.muted(),
-            ));
-        }
-    }
+    lines.extend(provenance_table(tui, inspection, area.width));
 
     frame.render_widget(Paragraph::new(scrolled(tui, lines, area)).scroll((tui.scroll, 0)), area);
+}
+
+/// The provenance table's columns, in print order.
+const PROV_HEADERS: [&str; 5] =
+    ["col_nutrient", "col_soil_status", "inspect_removal", "inspect_efficiency", "inspect_critical"];
+
+/// Only the thresholds right-align; the rest are compound cells that read
+/// left to right.
+const PROV_NUMERIC: [bool; 5] = [false, false, false, false, false];
+
+/// Given up in this order on a narrow panel. The efficiency range goes
+/// first because stage ⑤ prints the figure actually used, and the status
+/// next because the readings table above already carries it — the two
+/// reference figures a reader comes to this block for are the last to go.
+const PROV_DROP_ORDER: [usize; 3] = [3, 1, 4];
+
+/// The two compound cells shorten before any column is given up.
+const PROV_ELASTIC: [(usize, usize); 2] = [(4, 16), (2, 14)];
+
+/// Where each of a nutrient's reference figures comes from, one row per
+/// nutrient.
+///
+/// **No source or year.** Every figure here is drawn from a named study,
+/// and the citation is the longest thing on the row: printed, it pushed the
+/// figures themselves off the panel and was clipped mid-token
+/// (`Castro_Gomez_2009_tabla12_…`), so it identified nothing and cost the
+/// data its room.
+///
+/// Nothing is lost by dropping it. The provenance is still parsed onto
+/// [`RemovalReference`](crate::core::domain::RemovalReference) and
+/// [`CriticalLevel`](crate::core::domain::CriticalLevel), still stands in
+/// the `source` column of the table every figure was read from, and is
+/// written up per table in `data/reference/README.md` — which is where a
+/// reader checking the science goes, rather than squinting at a terminal.
+///
+/// The extraction method stays: it is not provenance but a lookup axis, and
+/// the same reading classifies differently under Bray II and Olsen.
+fn provenance_table<'a>(tui: &Tui, inspection: &ScenarioInspection, width: u16) -> Vec<Line<'a>> {
+    let rows: Vec<Vec<String>> = inspection
+        .provenance
+        .iter()
+        .map(|entry| {
+            let none = "—".to_string();
+            // A dash where the source table prints one: the two bases are
+            // shown apart because filling either from the other is the
+            // transcription error the two-column schema removed.
+            let removal = entry.removal_reference.as_ref().map_or_else(
+                || tui.i18n.t("inspect_no_removal").to_string(),
+                |removal| {
+                    let basis = |value: Option<f64>| value.map_or_else(|| "-".to_string(), |v| format!("{v}"));
+                    format!(
+                        "{} / {} kg/{}",
+                        basis(removal.extraction_kg_per_unit),
+                        basis(removal.absorption_kg_per_unit),
+                        tui.i18n.term(&removal.harvested_organ)
+                    )
+                },
+            );
+            let efficiency = entry
+                .efficiency_range
+                .map_or_else(|| none.clone(), |(min, max)| format!("{:.0}–{:.0}%", min * 100.0, max * 100.0));
+            // The unit belongs beside the thresholds: a K figure of 0.3 is
+            // adequate in cmolc/kg and destitute in mg/kg, and the reader
+            // has no other way to tell which is meant.
+            let critical = entry.critical_level.as_ref().map_or_else(
+                || none.clone(),
+                |level| {
+                    // The sentinel means the literature gives one set of
+                    // boundaries whatever extractant reported the number,
+                    // so naming it says nothing and costs a column its
+                    // room. A real method is printed: the same reading
+                    // classifies differently under Bray II and Olsen.
+                    let method = if level.extraction_method == super::REGION_ANY {
+                        String::new()
+                    } else {
+                        format!(" · {}", level.extraction_method)
+                    };
+                    format!(
+                        "{} / {} / {} {}{method}",
+                        level.low_threshold, level.medium_threshold, level.high_threshold, level.unit
+                    )
+                },
+            );
+            // Through the same span every other status on this page goes
+            // through, so one nutrient can never read `bajo` here and
+            // something else two blocks up.
+            let status = soil_status_span(tui, planned_status(tui, &entry.nutrient.to_string())).content.to_string();
+            vec![entry.nutrient.to_string(), status, removal, efficiency, critical]
+        })
+        .collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let headers = PROV_HEADERS.map(|id| tui.i18n.t(id).to_uppercase());
+    let (kept, laid_out) = fitted_rows(&headers, &rows, &PROV_NUMERIC, &PROV_DROP_ORDER, &PROV_ELASTIC, width);
+    let mut lines = vec![table_line(&laid_out[0], &kept, |_| tui.theme.muted())];
+    lines.extend(laid_out[1..].iter().map(|row| {
+        table_line(row, &kept, |column| if column == 0 { tui.theme.accent() } else { tui.theme.base() })
+    }));
+    lines
 }
 
 /// Column headings for the readings, laid out by hand rather than as a
 /// `Table`: the whole stage is one scrollable page, and a table widget
 /// would not scroll with the provenance under it.
 ///
-/// No source column: it was a fourth column of `Castro_Gomez_2009_tabla12_…`
-/// strings clipped mid-token, and the provenance block at the bottom of this
-/// same page already names every reference in full.
+/// No source column, for the same reason [`provenance_table`] carries
+/// none: it was a fourth column of `Castro_Gomez_2009_tabla12_…` strings
+/// clipped mid-token.
 fn reading_header<'a>(tui: &Tui) -> Line<'a> {
     Line::styled(
         format!(
@@ -1264,25 +1356,44 @@ fn reading_header<'a>(tui: &Tui) -> Line<'a> {
     )
 }
 
-/// One reading against its table. A value the table names no band for is
-/// reported as unclassified rather than rounded into the nearest one —
-/// see [`crate::core::domain::QualitativeBand`].
+/// One reading against its table, and where in that table it fell.
 ///
-/// ponytail: the prototype draws a filled scale here. Placing a value on
-/// one needs the band bounds, which `ScenarioInspection` does not carry;
-/// the source of the verdict is shown instead. Add the gauge the day the
-/// inspection reports the bands it classified against.
-fn reading_row<'a>(tui: &Tui, reading: &crate::core::domain::PropertyAssessment) -> Line<'a> {
+/// A value the table names no band for is reported as unclassified rather
+/// than rounded into the nearest one — see
+/// [`crate::core::domain::QualitativeBand`] — and the gauge draws no mark
+/// for it, which is the same refusal in the same place.
+///
+/// The scale is what the verdict cannot say. `6.3` reading *slightly acid*
+/// is a different soil to manage at the top of that band than at the
+/// bottom, and the word is identical either way. It is dropped whole on a
+/// panel too narrow for it, because a squeezed scale misplaces the mark
+/// rather than merely shrinking.
+fn reading_row<'a>(tui: &Tui, reading: &crate::core::domain::PropertyAssessment, width: u16) -> Line<'a> {
     let (category, style) = match &reading.category {
-        Some(category) => (category.clone(), tui.theme.strong()),
+        Some(category) => (tui.i18n.term(category), tui.theme.strong()),
         None => (tui.i18n.t("value_unclassified").to_string(), tui.theme.muted()),
     };
-    Line::from(vec![
-        Span::styled(format!("  {:<20}", reading.property.replace('_', " ")), tui.theme.muted()),
+    let mut spans = vec![
+        Span::styled(format!("  {:<20}", tui.i18n.term(&reading.property)), tui.theme.muted()),
         Span::styled(format!("{:>8}", format!("{:.2}", reading.value)), tui.theme.accent()),
-        Span::styled(format!("  {category}"), style),
-    ])
+    ];
+    if width >= READING_GAUGE_AT {
+        spans.push(Span::raw("  "));
+        spans.extend(viz::gauge(tui.theme, reading.value, &reading.bands, GAUGE_WIDTH).spans);
+    }
+    spans.push(Span::styled(format!("  {category}"), style));
+    Line::from(spans)
 }
+
+/// Cells a gauge takes, brackets included. Wide enough that a table of
+/// nine bands still gets two cells each, which is the narrowest a band can
+/// be and still show a mark inside itself rather than at its edge.
+const GAUGE_WIDTH: usize = 26;
+
+/// Panel width below which the readings drop their scale. The label,
+/// figure and verdict come to about forty columns on their own; under this
+/// the scale would be taking room from the words it annotates.
+const READING_GAUGE_AT: u16 = 68;
 
 // ---- stage 2 · crop ------------------------------------------------------
 
@@ -1496,14 +1607,14 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
         return frame.render_widget(empty(tui, "no_plan"), area);
     };
 
-    let rows: Vec<Row> = plan
+    let rows: Vec<Vec<String>> = plan
         .nutrient_results
         .iter()
         .map(|entry| {
             let none = tui.i18n.t("value_none").to_string();
             let (product, grade, dose) = match &entry.dose {
                 Some(dose) => (
-                    dose.source_name.clone(),
+                    product_name(tui, &dose.source_id, &dose.source_name),
                     grade_of(tui, &dose.source_id),
                     format!("{:.0} kg/ha", dose.kg_product_per_ha),
                 ),
@@ -1513,28 +1624,13 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
                 // that one is the note below the table.
                 None => (none.clone(), String::new(), none),
             };
-            Row::new(vec![
-                Cell::from(Span::styled(entry.nutrient.to_string(), tui.theme.accent())),
-                Cell::from(format!("{:.0}", entry.net_requirement_kg_ha)),
-                Cell::from(Span::styled(product, tui.theme.base())),
-                Cell::from(Span::styled(grade, tui.theme.muted())),
-                Cell::from(Span::styled(dose, tui.theme.strong())),
-            ])
+            vec![entry.nutrient.to_string(), format!("{:.0}", entry.net_requirement_kg_ha), product, grade, dose]
         })
         .collect();
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(4),
-            Constraint::Length(9),
-            Constraint::Min(14),
-            Constraint::Length(11),
-            Constraint::Length(10),
-        ],
-    )
-    .header(header(tui, &["col_nutrient", "col_net", "col_source", "col_grade", "col_dose_amount"]));
 
-    let mut lines = vec![Line::raw(""), coverage_line(tui, plan)];
+    let mut lines = dose_table(tui, &rows, area.width);
+    lines.push(Line::raw(""));
+    lines.push(coverage_line(tui, plan));
     // Only where it is actually true: something is needed and the catalog
     // has nothing that carries it.
     let uncovered: Vec<String> = plan
@@ -1552,9 +1648,7 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
     if let Some(liming) = &plan.liming {
         let material = liming
             .material
-            .as_ref()
-            .map(|dose| format!("{} · {:.1} t/ha", dose.source_name, dose.t_product_per_ha))
-            .unwrap_or_else(|| format!("{:.1} t/ha CaCO₃", liming.recommended_t_ha));
+            .as_ref().map_or_else(|| format!("{:.1} t/ha CaCO₃", liming.recommended_t_ha), |dose| format!("{} · {:.1} t/ha", product_name(tui, &dose.source_id, &dose.source_name), dose.t_product_per_ha));
         lines.push(Line::from(vec![
             Span::styled(format!("{}  ", tui.i18n.t("st_liming")), tui.theme.warn()),
             Span::styled(material, tui.theme.strong()),
@@ -1571,7 +1665,7 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
         ]));
     }
     lines.push(Line::raw(""));
-    lines.extend(recommendation_lines(tui));
+    lines.extend(recommendation_lines(tui, area.width));
 
     lines.push(Line::raw(""));
     lines.push(Line::styled(tui.i18n.t("sources_micro").to_string(), tui.theme.title()));
@@ -1585,7 +1679,7 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
             soil_status_span(tui, Some(micro.soil_status)),
             Span::styled(
                 match &micro.dose {
-                    Some(dose) => format!("  {} · {:.1} kg/ha", dose.source_name, dose.kg_product_per_ha),
+                    Some(dose) => format!("  {} · {:.1} kg/ha", product_name(tui, &dose.source_id, &dose.source_name), dose.kg_product_per_ha),
                     None => String::new(),
                 },
                 tui.theme.strong(),
@@ -1593,12 +1687,49 @@ fn sources(frame: &mut Frame, area: Rect, tui: &Tui) {
         ]));
     }
 
-    // The table takes what it needs, the notes take the rest.
-    let table_height = (plan.nutrient_results.len() as u16 + 2).min(area.height);
-    let [table_area, notes] =
-        Layout::vertical([Constraint::Length(table_height), Constraint::Min(0)]).areas(area);
-    frame.render_widget(table, table_area);
-    frame.render_widget(Paragraph::new(scrolled(tui, lines, notes)).scroll((tui.scroll, 0)), notes);
+    frame.render_widget(Paragraph::new(scrolled(tui, lines, area)).scroll((tui.scroll, 0)), area);
+}
+
+/// The dose table's columns, in print order.
+const DOSE_HEADERS: [&str; 5] = ["col_nutrient", "col_net", "col_source", "col_grade", "col_dose_amount"];
+
+/// The nutrient and its product read left to right; the two quantities
+/// right-align so a column of figures reads down its last digit.
+const DOSE_NUMERIC: [bool; 5] = [false, true, false, false, true];
+
+/// The grade goes first — the buy table below prints it too — then what is
+/// left to apply, which stage ⑤ carries in full. What stays is the answer:
+/// this nutrient, this product, this much.
+const DOSE_DROP_ORDER: [usize; 2] = [3, 1];
+
+/// The product name shortens before anything is dropped, down to enough to
+/// tell two fertilizers apart.
+const DOSE_ELASTIC: [(usize, usize); 1] = [(2, BUY_MIN_PRODUCT)];
+
+/// Which product covers each nutrient, at what grade and what dose.
+///
+/// The last table on this side of the app to keep a `Table` widget, and it
+/// had the bug the widget does not solve: `Constraint::Min(14)` let the
+/// product column take whatever was going and then clipped the name flush,
+/// mid-word — `Azufre elemental agrícola (granula` reads as a product that
+/// does not exist. Through the same layout as every other table now, so a
+/// shortened name says it is shortened.
+fn dose_table<'a>(tui: &Tui, rows: &[Vec<String>], width: u16) -> Vec<Line<'a>> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let headers = DOSE_HEADERS.map(|id| tui.i18n.t(id).to_uppercase());
+    let (kept, laid_out) =
+        fitted_rows(&headers, rows, &DOSE_NUMERIC, &DOSE_DROP_ORDER, &DOSE_ELASTIC, width);
+    let mut lines = vec![table_line(&laid_out[0], &kept, |_| tui.theme.muted())];
+    lines.extend(laid_out[1..].iter().map(|row| {
+        table_line(row, &kept, |column| match column {
+            0 => tui.theme.accent(),
+            2 | 4 => tui.theme.strong(),
+            _ => tui.theme.muted(),
+        })
+    }));
+    lines
 }
 
 fn strategy_label(strategy: FertilizationStrategy) -> &'static str {
@@ -1614,27 +1745,290 @@ fn strategy_label(strategy: FertilizationStrategy) -> &'static str {
 /// One product per line, exactly as the report and the CLI print it — the
 /// figures are read off the same [`report_renderer`] the PDF uses, so the
 /// screen and the exported page cannot disagree.
-fn recommendation_lines<'a>(tui: &Tui) -> Vec<Line<'a>> {
+fn recommendation_lines<'a>(tui: &Tui, width: u16) -> Vec<Line<'a>> {
     let Some(report) = &tui.recommendation else {
         return vec![Line::styled(tui.i18n.t("sources_no_program").to_string(), tui.theme.muted())];
     };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("{}  ", tui.i18n.t("sources_program")), tui.theme.title()),
-        Span::styled(
-            format!(
-                "{} · {:.1} ha · {:.0} kg/{}",
-                tui.i18n.t(strategy_label(report.scenario.strategy)),
-                report.scenario.total_area_ha,
-                report.scenario.bag_weight_kg,
-                tui.i18n.t("unit_bag")
-            ),
-            tui.theme.muted(),
-        ),
-    ])];
-    for line in report_renderer::render_summary(report).into_iter().skip(3) {
-        lines.push(Line::styled(line, tui.theme.base()));
+    let title = tui.i18n.t("sources_program").to_string();
+    let terms = format!(
+        "{} · {:.1} ha · {:.0} kg/{}",
+        tui.i18n.t(strategy_label(report.scenario.strategy)),
+        report.scenario.total_area_ha,
+        report.scenario.bag_weight_kg,
+        tui.i18n.t("unit_bag")
+    );
+    let mut heading = vec![Span::styled(title.clone(), tui.theme.title())];
+    // The terms of the program are a fixed ~40 characters that the table
+    // below is free to give up but this line was not: on a narrow panel it
+    // ran off the edge and took the word "buy" with it. Dropped whole
+    // rather than clipped — half a strategy name is a different claim.
+    if title.chars().count() + 2 + terms.chars().count() <= width as usize {
+        heading.push(Span::styled(format!("  {terms}"), tui.theme.muted()));
+    }
+    let mut lines = vec![Line::from(heading)];
+    lines.extend(buy_table(tui, report, width));
+    lines
+}
+
+/// The buy table's columns, in print order.
+const BUY_HEADERS: [&str; 7] =
+    ["col_source", "col_type", "col_grade", "col_kg_ha", "col_kg_total", "col_bags_ha", "col_bags"];
+
+/// Which of them are figures, so they sit right-aligned under their header
+/// and a column of numbers can be read down its last digit.
+const BUY_NUMERIC: [bool; 7] = [false, false, false, true, true, true, true];
+
+/// Given up in this order when the panel cannot hold all seven.
+///
+/// A grower acts on *which product* and *how much of it*: `bags/ha`,
+/// `kg total` and `type` are all recoverable from what stays, so they are
+/// what a narrow terminal drops. The exported report drops nothing — it
+/// prints to a page whose width nobody is resizing, so it keeps the wide
+/// table in `report_renderer::program_table`.
+/// `grade` is last because it is the one column a grower reads *and* the
+/// one that overflowed: `0-0-0-28CaO-19.9MgO` is 19 wide against a field of
+/// 12, which is what pushed every figure on that row out of true.
+const BUY_DROP_ORDER: [usize; 4] = [5, 4, 1, 2];
+
+/// The columns that shorten before any is dropped, and the least each may
+/// keep. A product column too narrow to tell two fertilizers apart, or a
+/// grade too narrow to show its first number, is worse than one more
+/// column given up.
+const BUY_ELASTIC: [(usize, usize); 2] = [(0, BUY_MIN_PRODUCT), (2, BUY_MIN_GRADE)];
+
+/// Enough for the shortest name a catalog actually ships plus its ellipsis.
+const BUY_MIN_PRODUCT: usize = 14;
+
+/// Enough for a plain `18-45.8-0`.
+const BUY_MIN_GRADE: usize = 9;
+
+/// Two spaces between columns and two of indent, the way every other block
+/// on this screen sits.
+const TABLE_GAP: usize = 2;
+
+/// The program as a table laid out for the width it actually has.
+///
+/// The figures come from the same [`FertilizerRecommendationReport`] the
+/// PDF and the CLI print, so no number here can disagree with an exported
+/// one — but the *layout* is the screen's own. The shared fixed-width text
+/// assumed 94 columns, and a panel narrower than that clipped whole columns
+/// off the right edge, silently: the header still read `bags/ha` where only
+/// `bag` fit, and a grade wider than its field pushed every figure after it
+/// out of alignment.
+fn buy_table<'a>(tui: &Tui, report: &FertilizerRecommendationReport, width: u16) -> Vec<Line<'a>> {
+    let program = &report.chosen;
+    if program.lines.is_empty() {
+        return vec![Line::styled(format!("  {}", tui.i18n.t("sources_no_program")), tui.theme.muted())];
+    }
+
+    let mut rows: Vec<[String; 7]> = program
+        .lines
+        .iter()
+        .map(|line| {
+            let (per_ha, total) = match line.bags {
+                Some(bags) => (format!("{:.2}", bags.bags_per_ha), bags.bags_total_rounded_up.to_string()),
+                None => ("-".to_string(), "-".to_string()),
+            };
+            [
+                product_name(tui, &line.source_id, &line.source_name),
+                tui.i18n.t(role_label(line.role)).to_string(),
+                line.grade.label(),
+                format!("{:.1}", line.kg_per_ha),
+                format!("{:.1}", line.kg_total),
+                per_ha,
+                total,
+            ]
+        })
+        .collect();
+    rows.push([
+        tui.i18n.t("buy_total").to_string(),
+        String::new(),
+        String::new(),
+        format!("{:.1}", program.total_kg_per_ha),
+        format!("{:.1}", program.total_kg),
+        String::new(),
+        program.total_bags_rounded_up.to_string(),
+    ]);
+
+    let (kept, laid_out) = fitted_rows(
+        &BUY_HEADERS.map(|id| tui.i18n.t(id).to_uppercase()),
+        &rows.iter().map(|row| row.to_vec()).collect::<Vec<_>>(),
+        &BUY_NUMERIC,
+        &BUY_DROP_ORDER,
+        &BUY_ELASTIC,
+        width,
+    );
+
+    let mut lines = vec![table_line(&laid_out[0], &kept, |_| tui.theme.muted())];
+    let last = laid_out.len() - 1;
+    for (index, row) in laid_out.iter().enumerate().skip(1) {
+        // The TOTAL row is the one figure anybody quotes out loud. On the
+        // rows above it, the product and the dose are what somebody buys
+        // on; the type and the grade are how they check they bought right.
+        lines.push(table_line(row, &kept, |column| match column {
+            _ if index == last => tui.theme.strong(),
+            0 => tui.theme.accent(),
+            3 | 6 => tui.theme.strong(),
+            _ => tui.theme.muted(),
+        }));
     }
     lines
+}
+
+/// Lays a table out for the width it actually has, header row first.
+///
+/// Both tables on this side of the app are blocks of `Line`s inside a
+/// scrolling paragraph rather than `Table` widgets — a widget would not
+/// scroll with the prose around it — so neither gets ratatui's own column
+/// fitting and both had the same bug: a cell wider than its field pushed
+/// every column after it right, and the overflow ran off the panel where
+/// nobody could see it had been cut.
+///
+/// # Arguments
+/// * `headers` — one heading per column, already translated.
+/// * `rows` — the cells, each row as wide as `headers`.
+/// * `numeric` — which columns right-align, so figures read down their
+///   last digit.
+/// * `drop_order` — columns given up when the width runs out, least
+///   load-bearing first.
+/// * `elastic` — `(column, floor)` for columns that shorten before
+///   anything is dropped at all. A shortened cell keeps an ellipsis, so it
+///   reads as shortened rather than as a value nobody recognises.
+/// * `width` — what the panel actually has.
+///
+/// # Returns
+/// The columns that survived, and the header followed by one padded cell
+/// per surviving column per row. Cells rather than finished lines so a
+/// caller can still colour a column: the figure somebody acts on and the
+/// verdict on a reading are what the eye has to land on, and a table
+/// painted in one flat colour hides both. [`table_line`] puts them
+/// together.
+fn fitted_rows(
+    headers: &[String],
+    rows: &[Vec<String>],
+    numeric: &[bool],
+    drop_order: &[usize],
+    elastic: &[(usize, usize)],
+    width: u16,
+) -> (Vec<usize>, Vec<Vec<String>>) {
+    // Every column asks for what its widest cell needs, header included.
+    let mut widths: Vec<usize> = (0..headers.len())
+        .map(|column| {
+            rows.iter()
+                .map(|row| row[column].chars().count())
+                .chain([headers[column].chars().count()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let available = (width as usize).saturating_sub(TABLE_GAP);
+    let span = |kept: &[usize], widths: &[usize]| -> usize {
+        kept.iter().map(|column| widths[*column]).sum::<usize>() + TABLE_GAP * kept.len().saturating_sub(1)
+    };
+    // Shorten what can be shortened before giving a whole column up: a
+    // narrowed cell still says something, a dropped column is gone.
+    let squeeze = |kept: &[usize], widths: &mut Vec<usize>| {
+        let mut over = span(kept, widths).saturating_sub(available);
+        for (column, floor) in elastic {
+            if over == 0 || !kept.contains(column) {
+                continue;
+            }
+            let give = widths[*column].saturating_sub(*floor).min(over);
+            widths[*column] -= give;
+            over -= give;
+        }
+        over
+    };
+    let mut kept: Vec<usize> = (0..headers.len()).collect();
+    for column in drop_order {
+        if squeeze(&kept, &mut widths) == 0 {
+            break;
+        }
+        kept.retain(|keep| keep != column);
+    }
+    squeeze(&kept, &mut widths);
+
+    let cell = |text: &str, column: usize| -> String {
+        let width = widths[column];
+        let text = if text.chars().count() > width {
+            text.chars().take(width.saturating_sub(1)).chain(['…']).collect()
+        } else {
+            text.to_string()
+        };
+        if numeric[column] {
+            format!("{text:>width$}")
+        } else {
+            format!("{text:<width$}")
+        }
+    };
+    let laid_out = std::iter::once(headers)
+        .chain(rows.iter().map(Vec::as_slice))
+        .map(|row| kept.iter().map(|column| cell(&row[*column], *column)).collect())
+        .collect();
+    (kept, laid_out)
+}
+
+/// What [`table_line`] will make of a laid-out row, in cells — the indent
+/// and one gap per cell.
+fn row_width(cells: &[String]) -> usize {
+    cells.iter().map(|cell| cell.chars().count() + TABLE_GAP).sum::<usize>() + TABLE_GAP
+}
+
+/// One laid-out row as a line: two spaces of indent, two between cells, and
+/// whatever style each column asks for.
+///
+/// `style` is asked by *original* column index, not by position, so a
+/// caller's styling does not shift when a narrow panel drops a column out
+/// from under it.
+fn table_line<'a>(cells: &[String], kept: &[usize], style: impl Fn(usize) -> Style) -> Line<'a> {
+    let mut spans = vec![Span::raw(" ".repeat(TABLE_GAP))];
+    for (position, cell) in cells.iter().enumerate() {
+        if position > 0 {
+            spans.push(Span::raw(" ".repeat(TABLE_GAP)));
+        }
+        spans.push(Span::styled(cell.clone(), style(kept[position])));
+    }
+    Line::from(spans)
+}
+
+/// A product's part in the program, in the reader's own language — the
+/// shared report prints these in English whatever bundle is loaded.
+fn role_label(role: SourceRole) -> &'static str {
+    match role {
+        SourceRole::Composite => "buy_role_compound",
+        SourceRole::Simple => "buy_role_straight",
+    }
+}
+
+/// A product's name in the reader's language.
+///
+/// A reference profile is a body of literature *and* a market, so its
+/// catalog is written in that market's language: `andina_colombia`'s is
+/// Spanish. Almost none of it is a trade name, though — `Sulfato de
+/// amonio` is a compound with an exact English name, and leaving it in
+/// place under an English interface is a translation gap rather than a
+/// fact about what you ask for at the counter.
+///
+/// Through [`I18n::term`](super::i18n::I18n::term) keyed on the catalog id,
+/// so a product nobody has translated prints the catalog's own name and a
+/// new row never shows up as a key. Ids rather than names because a name
+/// is the thing being replaced.
+///
+/// The four hundred formula rows — NPK grades, bulk blends, organominerals
+/// — are deliberately not translated: their identity is the grade, which
+/// is a column of its own on every table that shows them, and rendering
+/// the adjective beside it in English buys nothing a reader needs.
+fn product_name(tui: &Tui, source_id: &str, catalog_name: &str) -> String {
+    let translated = tui.i18n.term(source_id);
+    // `term` opens the underscores out of an id it has no string for,
+    // which for a catalog key is not a product name — fall back to what
+    // the catalog itself printed.
+    if translated == source_id.replace('_', " ") {
+        catalog_name.to_string()
+    } else {
+        translated
+    }
 }
 
 /// The composition behind a dose, read off the catalog the active profile
@@ -1668,69 +2062,290 @@ fn coverage_line<'a>(tui: &Tui, plan: &FertilityPlan) -> Line<'a> {
 
 // ---- stage 5 · plan ------------------------------------------------------
 
-/// The nutrient balance: what the crop asks for, what the soil already
-/// gives, and what is left to apply. The product behind each figure lives
-/// one stage back, on ④ — the prototype's plan table is six columns wide
-/// and must not overflow the panel.
+/// The closing page: the whole scenario in one place — what was planned
+/// for, the nutrient balance, what the readings mean against their critical
+/// levels, and what to buy.
+///
+/// It repeats figures the earlier stages already showed, deliberately: this
+/// is the page a grower reads once and acts on, and sending them back three
+/// screens to find out whether `bajo` meant 12 or 120 is what the repetition
+/// buys off. Every figure is the same struct the earlier stage read.
+///
+/// One scrolling block of `Line`s rather than a `Table` widget with notes
+/// under it — a widget stays pinned while the rest of the page scrolls, and
+/// four blocks do not fit a panel.
 fn plan(frame: &mut Frame, area: Rect, tui: &Tui) {
     let Some(plan) = &tui.plan else {
         return frame.render_widget(empty(tui, "no_plan"), area);
     };
 
-    let rows: Vec<Row> = plan
+    let mut lines = summary(tui, plan);
+
+    lines.push(Line::raw(""));
+    // Every figure in the block is kg/ha, said once here rather than in
+    // four headings that would each cost their column six characters.
+    lines.push(Line::from(vec![
+        Span::styled(tui.i18n.t("col_balance").to_string(), tui.theme.title()),
+        Span::styled("  kg/ha", tui.theme.muted()),
+    ]));
+    lines.extend(balance_table(tui, plan, area.width));
+
+    if let Some(inspection) = &tui.inspection {
+        let interpretation = critical_table(tui, plan, inspection, area.width);
+        if !interpretation.is_empty() {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(tui.i18n.t("plan_interpretation").to_string(), tui.theme.title()));
+            lines.extend(interpretation);
+        }
+    }
+
+    if let Some(report) = &tui.recommendation {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(tui.i18n.t("sources_program").to_string(), tui.theme.title()));
+        // Narrower than the panel on purpose: `BUY_DROP_ORDER` already
+        // ranks the columns by what a grower acts on, so asking it for a
+        // 60-wide table *is* the summary — product, dose and bags, with
+        // stage ④ one keystroke away for the rest.
+        lines.extend(buy_table(tui, report, area.width.min(PLAN_BUY_WIDTH)));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(climate_line(tui, plan));
+    for warning in &plan.warnings {
+        lines.push(Line::styled(format!(" {}", warning_text(tui, warning)), tui.theme.warn()));
+    }
+
+    frame.render_widget(
+        Paragraph::new(scrolled(tui, lines, area)).wrap(Wrap { trim: true }).scroll((tui.scroll, 0)),
+        area,
+    );
+}
+
+/// What the buy table gets on this page. Enough for product, dose and
+/// bags; short enough that it reads as a summary of stage ④ rather than a
+/// second copy of it.
+const PLAN_BUY_WIDTH: u16 = 60;
+
+/// What was planned for, what it comes to, and whether anything has to
+/// happen before the fertilizer does.
+///
+/// The heading is the same `id · conditions` line stage ① opens with, for
+/// the same reason: a page of figures has to say what they are about before
+/// it says anything else. The status column carries some of this too, but
+/// it is the first thing a narrow terminal drops.
+fn summary<'a>(tui: &Tui, plan: &FertilityPlan) -> Vec<Line<'a>> {
+    let mut context = format!("· {} {}", plan.yield_target.value, plan.yield_target.unit);
+    if let Some(report) = &tui.recommendation {
+        context.push_str(&format!(" · {:.1} ha", report.scenario.total_area_ha));
+    }
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{} ", plan.field_id), tui.theme.title()),
+        Span::styled(format!("{} {context}", plan.crop_id), tui.theme.muted()),
+    ])];
+    // No label column on the total: on a panel sharing the terminal with
+    // two others, an 18-wide label pushed `10 bag` onto a line of its own,
+    // and a figure broken across two lines reads as two figures. The units
+    // say what it is.
+    if let Some(program) = tui.recommendation.as_ref().map(|report| &report.chosen) {
+        lines.push(Line::styled(
+            format!(
+                "{:.0} kg/ha · {:.0} kg · {} {}",
+                program.total_kg_per_ha,
+                program.total_kg,
+                program.total_bags_rounded_up,
+                // The plural, which the buy table's own heading already
+                // carries: `unit_bag` is the singular of `50 kg/bulto`.
+                tui.i18n.t("col_bags")
+            ),
+            tui.theme.strong(),
+        ));
+    }
+    // Liming is the one recommendation whose *order* matters — lime applied
+    // after the fertilizer wastes both — so it is stated here rather than
+    // left to stage ④, and in the colour the rest of the app uses for
+    // something to do before anything else.
+    if let Some(liming) = &plan.liming {
+        lines.push(Line::styled(
+            format!(
+                "{} · {}",
+                tui.i18n.t("st_liming"),
+                // Dose before material: the name of a liming product runs
+                // to forty characters, and on a narrow panel it is the
+                // half that should wrap, not the figure.
+                liming.material.as_ref().map_or_else(
+                    || format!("{:.1} t/ha CaCO₃", liming.recommended_t_ha),
+                    |dose| format!("{:.1} t/ha · {}", dose.t_product_per_ha, product_name(tui, &dose.source_id, &dose.source_name)),
+                )
+            ),
+            tui.theme.warn(),
+        ));
+    }
+    lines
+}
+
+/// The balance table's columns, in print order.
+const BALANCE_HEADERS: [&str; 5] =
+    ["col_nutrient", "col_demand", "col_availability", "col_efficiency", "col_net"];
+
+/// Everything but the nutrient's own name is a figure.
+const BALANCE_NUMERIC: [bool; 5] = [false, true, true, true, true];
+
+/// Given up in this order. Efficiency and availability are how the figure
+/// on the right was arrived at; `col_net` is the figure itself, and the
+/// demand beside it is what makes it mean anything.
+const BALANCE_DROP_ORDER: [usize; 2] = [3, 2];
+
+/// What the crop asks for, what the soil gives, and what is left to apply.
+///
+/// The prototype closed each row with a proportion bar of net against
+/// demand. It is gone: the two figures it compared sit two columns apart on
+/// the same row, so the bar restated them in a form that needed a legend
+/// nobody had — and it cost eight columns on the page that most needs them.
+fn balance_table<'a>(tui: &Tui, plan: &FertilityPlan, width: u16) -> Vec<Line<'a>> {
+    let rows: Vec<Vec<String>> = plan
         .nutrient_results
         .iter()
         .map(|entry| {
-            Row::new(vec![
-                Cell::from(Span::styled(entry.nutrient.to_string(), tui.theme.accent())),
-                Cell::from(format!("{:.0}", entry.demand_kg_ha)),
-                Cell::from(format!("{:.0}", entry.availability_kg_ha)),
-                Cell::from(soil_status_span(tui, entry.soil_status)),
-                Cell::from(format!("{:.0}%", entry.efficiency_used * 100.0)),
-                Cell::from(Span::styled(format!("{:.0}", entry.net_requirement_kg_ha), tui.theme.strong())),
-                Cell::from(bar(tui, entry.net_requirement_kg_ha, entry.demand_kg_ha, 8)),
+            vec![
+                entry.nutrient.to_string(),
+                format!("{:.0}", entry.demand_kg_ha),
+                format!("{:.0}", entry.availability_kg_ha),
+                format!("{:.0}%", entry.efficiency_used * 100.0),
+                format!("{:.0}", entry.net_requirement_kg_ha),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let headers = BALANCE_HEADERS.map(|id| tui.i18n.t(id).to_uppercase());
+    let (kept, laid_out) = fitted_rows(&headers, &rows, &BALANCE_NUMERIC, &BALANCE_DROP_ORDER, &[], width);
+    let mut lines = vec![table_line(&laid_out[0], &kept, |_| tui.theme.muted())];
+    // Demand, supply and efficiency are the arithmetic; the last column is
+    // the only figure anybody applies. It reads as the answer it is.
+    lines.extend(laid_out[1..].iter().map(|row| {
+        table_line(row, &kept, |column| match column {
+            0 => tui.theme.accent(),
+            4 => tui.theme.strong(),
+            _ => tui.theme.muted(),
+        })
+    }));
+    lines
+}
+
+/// The interpretation table's columns, in print order.
+const CRITICAL_HEADERS: [&str; 3] = ["col_nutrient", "col_value", "col_soil_status"];
+
+/// The reading right-aligns under its header; the nutrient and the verdict
+/// read left to right.
+const CRITICAL_NUMERIC: [bool; 3] = [false, true, false];
+
+/// Why each nutrient reads `bajo`, `medio` or `alto`: the lab figure, the
+/// bands it was compared against, and the verdict — the one thing the plan
+/// asserts about the soil that a reader cannot otherwise check.
+///
+/// The bands are printed the way
+/// [`CriticalLevel::classify`](crate::core::domain::CriticalLevel::classify)
+/// actually cuts them, which is on `low` and `medium` only. `high_threshold`
+/// is not shown because no reading is ever compared against it; printing a
+/// third boundary would suggest a band that does not exist.
+///
+/// The reading carries its own unit only when that differs from the bands':
+/// classification converts first, so a row whose two units disagree is
+/// correct but cannot be checked by eye, and hiding the mismatch would be
+/// the worse of the two.
+///
+/// **The boundaries are drawn, not printed.** They were printed here for
+/// one revision, and the width arithmetic settled it: the numbers come to
+/// some thirty columns and the scale to twenty-six, and a panel sharing
+/// the terminal with two others has room for one. The scale wins because
+/// it answers what the numbers leave open — a K of 0.39 and a K of 0.05
+/// print the same word against the same boundaries and are a different
+/// problem — and because the boundaries are not lost: stage ① states them
+/// in full beside the study that set them, which is what that page is for.
+///
+/// A panel too narrow for the scale gets the reading and the verdict and
+/// no scale, rather than a squeezed one. A track with too few cells does
+/// not shrink, it misplaces the mark.
+fn critical_table<'a>(
+    tui: &Tui,
+    plan: &FertilityPlan,
+    inspection: &ScenarioInspection,
+    width: u16,
+) -> Vec<Line<'a>> {
+    let mut gauged = Vec::new();
+    let rows: Vec<Vec<String>> = plan
+        .nutrient_results
+        .iter()
+        .filter_map(|entry| {
+            let level = inspection
+                .provenance
+                .iter()
+                .find(|prov| prov.nutrient == entry.nutrient)?
+                .critical_level
+                .as_ref()?;
+            let test = inspection.soil_tests.iter().find(|test| test.nutrient == entry.nutrient);
+            // The reading carries the unit it was *read* in, always. When
+            // the boundaries are printed they carry theirs too and the two
+            // can be compared by eye; when the scale replaces them, this is
+            // the only unit on the row and it had better be there.
+            let reading = test.map_or_else(String::new, |test| format!("{} {}", test.value, test.unit));
+            // Only a reading already in the thresholds' unit can be placed
+            // on their scale. One in another unit keeps its row and its
+            // verdict — the domain converted before classifying — and goes
+            // without a mark rather than with one drawn off a mismatch.
+            let placeable = test.filter(|test| test.unit == level.unit).map_or(f64::NAN, |test| test.value);
+            gauged.push((entry.soil_status, level.bands(&entry.nutrient.to_string()), placeable));
+            Some(vec![
+                entry.nutrient.to_string(),
+                reading,
+                soil_status_span(tui, entry.soil_status).content.to_string(),
             ])
         })
         .collect();
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(4),
-            Constraint::Length(8),
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Length(5),
-            Constraint::Length(9),
-            Constraint::Min(8),
-        ],
-    )
-    .header(header(
-        tui,
-        &[
-            "col_nutrient",
-            "col_demand",
-            "col_availability",
-            "col_soil_status",
-            "col_efficiency",
-            "col_net",
-            "col_balance",
-        ],
-    ));
-
-    let mut notes = vec![climate_line(tui, plan)];
-    for warning in &plan.warnings {
-        notes.push(Line::styled(format!(" {}", warning_text(tui, warning)), tui.theme.warn()));
+    if rows.is_empty() {
+        return Vec::new();
     }
 
-    let table_height = (plan.nutrient_results.len() as u16 + 2).min(area.height);
-    let [table_area, note_area] =
-        Layout::vertical([Constraint::Length(table_height), Constraint::Min(0)]).areas(area);
-    frame.render_widget(table, table_area);
-    frame.render_widget(
-        Paragraph::new(scrolled(tui, notes, note_area)).wrap(Wrap { trim: true }).scroll((tui.scroll, 0)),
-        note_area,
-    );
+    let headers = CRITICAL_HEADERS.map(|id| tui.i18n.t(id).to_uppercase());
+    let (kept, laid_out) = fitted_rows(&headers, &rows, &CRITICAL_NUMERIC, &[], &[], width);
+    let scales = row_width(&laid_out[0]) + GAUGE_WIDTH + TABLE_GAP <= width as usize;
+
+    let mut header = table_line(&laid_out[0], &kept, |_| tui.theme.muted());
+    if scales {
+        // Which way the scale runs, said once. A track with no heading is
+        // the failure the balance bar was deleted for: a picture nobody
+        // can read without being told what its ends mean.
+        header.spans.push(Span::styled(
+            format!(
+                "{:>gap$}{:^width$}",
+                "",
+                format!("{} → {}", tui.i18n.t("soil_low"), tui.i18n.t("soil_high")).to_uppercase(),
+                gap = TABLE_GAP,
+                width = GAUGE_WIDTH
+            ),
+            tui.theme.muted(),
+        ));
+    }
+    let mut lines = vec![header];
+    // The verdict alone carries the colour. Painting the whole row in it
+    // put a wall of red on any soil that reads low across the board, which
+    // is exactly the soil whose numbers most need to stay legible.
+    lines.extend(laid_out[1..].iter().zip(&gauged).map(|(row, (status, bands, value))| {
+        let mut line = table_line(row, &kept, |column| match column {
+            0 => tui.theme.accent(),
+            1 => tui.theme.strong(),
+            2 => soil_status_span(tui, *status).style,
+            _ => tui.theme.muted(),
+        });
+        if scales {
+            line.spans.push(Span::raw(" ".repeat(TABLE_GAP)));
+            line.spans.extend(viz::gauge(tui.theme, *value, bands, GAUGE_WIDTH).spans);
+        }
+        line
+    }));
+    lines
 }
 
 /// Hands the page's own measurements back to the state, which is what lets
@@ -1827,7 +2442,7 @@ fn settings(frame: &mut Frame, area: Rect, tui: &Tui) {
         .collect();
 
     let list = List::new(items)
-        .block(panel(tui.i18n.t("settings_title").to_string(), !tui.focus_modules, tui))
+        .block(panel(tui.i18n.t("settings_title"), !tui.focus_modules, tui))
         .highlight_style(if tui.focus_modules { tui.theme.accent() } else { tui.theme.selected() });
     frame.render_stateful_widget(list, area, &mut ListState::default().with_selected(Some(tui.setting_idx)));
 }
@@ -1872,9 +2487,75 @@ fn picker_overlay(frame: &mut Frame, tui: &Tui) {
     let area = centered(frame.area(), width, height);
     frame.render_widget(Clear, area);
     frame.render_stateful_widget(
-        List::new(items).block(panel(title, true, tui)).highlight_style(tui.theme.selected()),
+        List::new(items).block(panel(&title, true, tui)).highlight_style(tui.theme.selected()),
         area,
         &mut ListState::default().with_selected(Some(picker.idx)),
+    );
+}
+
+/// Why the dose is the size it is.
+///
+/// Efficiency divides the requirement, so it moves what somebody buys more
+/// than any other figure on the page — and the page had it as a bare
+/// `40%`. Everything shown here has been computed and carried on
+/// [`AdjustedEfficiency`](crate::core::domain::AdjustedEfficiency) since
+/// long before this panel existed; its own documentation calls the
+/// modifier list *"what makes a number in a report explainable"*, and
+/// nothing was reading it.
+///
+/// A panel rather than a column: six nutrients times four steps is
+/// twenty-four lines, which no page with three other blocks on it can hold
+/// open. It is also why the citations dropped from the tables can come
+/// back here — one nutrient at a time, there is room for them.
+fn inspector_overlay(frame: &mut Frame, tui: &Tui) {
+    let Some(index) = tui.inspecting else { return };
+    let Some(entry) = tui.plan.as_ref().and_then(|plan| plan.nutrient_results.get(index)) else { return };
+
+    // Room for the bars plus the widest condition·effect clause beside
+    // them, inside whatever the terminal actually is.
+    let width = frame.area().width.saturating_sub(8).clamp(48, 96);
+    let bars = (width as usize / 3).max(12);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!("{} ", entry.nutrient), tui.theme.accent()),
+            Span::styled(
+                format!("{:.0} kg/ha {}", entry.net_requirement_kg_ha, tui.i18n.t("col_net").to_lowercase()),
+                tui.theme.strong(),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+    lines.extend(viz::efficiency_waterfall(tui.theme, &entry.efficiency, bars));
+
+    // The literature behind each rule, which is the question a reader who
+    // disagrees with a modifier asks next.
+    let basis: Vec<&str> =
+        entry.efficiency.modifiers.iter().map(|modifier| modifier.basis.as_str()).filter(|b| !b.is_empty()).collect();
+    if !basis.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(format!(" {}", basis.join(" · ")), tui.theme.muted()));
+    }
+    for assumption in &entry.efficiency.assumptions {
+        lines.push(Line::styled(format!(" {assumption}"), tui.theme.warn()));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(format!(" {}", tui.i18n.t("inspector_hint")), tui.theme.muted()));
+
+    // Measured against the wrap rather than counted: the modifier clauses
+    // and the assumptions are prose, and a box sized by line count clipped
+    // the closing hint off the bottom.
+    let inner = width.saturating_sub(2) as usize;
+    let rows: usize = lines.iter().map(|line| line.width().max(1).div_ceil(inner)).sum();
+    let height = (rows as u16 + 2).min(frame.area().height.saturating_sub(2));
+    let area = centered(frame.area(), width, height);
+    frame.render_widget(Clear, area);
+    // The assumptions are prose and run to two lines; clipped they read as
+    // a sentence the app got wrong rather than one the panel cut.
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(tui.i18n.t("inspector_title"), true, tui)),
+        area,
     );
 }
 
@@ -1912,6 +2593,12 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
     if stage_index(tui.screen).is_some_and(|_| tui.screen != Screen::Target) {
         keys.insert(0, ("h/l · ←/→", "help_stage"));
     }
+    // The last stage is the one place Enter does not mean "next": there is
+    // no next, so it opens the explanation instead and `r` re-runs.
+    if tui.screen == Screen::Plan {
+        keys.insert(0, ("Enter", "help_inspect"));
+        keys.insert(1, ("r", "help_rerun"));
+    }
 
     let mut lines: Vec<Line> = keys
         .iter()
@@ -1928,7 +2615,7 @@ fn help_overlay(frame: &mut Frame, tui: &Tui) {
     let area = centered(frame.area(), 56, lines.len() as u16 + 2);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(panel(tui.i18n.t("help_title").to_string(), true, tui)),
+        Paragraph::new(lines).block(panel(tui.i18n.t("help_title"), true, tui)),
         area,
     );
 }
@@ -1973,10 +2660,29 @@ fn header<'a>(tui: &Tui, ids: &[&str]) -> Row<'a> {
         .bottom_margin(1)
 }
 
+/// The label column of the status pane and of every `label   value` line,
+/// which share it so the two blocks read as one column rather than two
+/// that nearly line up.
+const STATUS_LABEL: usize = 17;
+
+/// `text`, never wider than `width`, with an ellipsis where it was cut.
+///
+/// Rust's `{:<n}` is a *minimum*: it pads a short string and lets a long
+/// one through whole, which is how a product name came to sit on top of
+/// the figure beside it. Anything laying out a fixed field by hand needs
+/// this on the way in.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() > width {
+        text.chars().take(width.saturating_sub(1)).chain(['…']).collect()
+    } else {
+        format!("{text:<width$}")
+    }
+}
+
 /// `label   value`, emphasis on the value.
 fn field<'a>(tui: &Tui, id: &str, value: String) -> Line<'a> {
     Line::from(vec![
-        Span::styled(format!("{:<18}", tui.i18n.t(id)), tui.theme.muted()),
+        Span::styled(format!("{} ", clip(tui.i18n.t(id), STATUS_LABEL)), tui.theme.muted()),
         Span::styled(value, tui.theme.strong()),
     ])
 }
@@ -2089,7 +2795,7 @@ mod tests {
     fn render(tui: &Tui, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
         terminal.draw(|frame| draw(frame, tui)).expect("draw");
-        terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+        terminal.backend().buffer().content().iter().map(ratatui::buffer::Cell::symbol).collect()
     }
 
     /// Every id the chrome asks for by `match` rather than from a table,
@@ -2247,6 +2953,116 @@ mod tests {
         assert!(blinks(&tui), "the filter takes typing too");
     }
 
+    /// A cell you cycle a list on has to say so. Nothing did, so `method`
+    /// read as free text and the only way to learn `h`/`l` worked there was
+    /// to press it — which nobody does on a field that looks like typing.
+    #[test]
+    fn a_cell_with_a_list_behind_it_is_bracketed_and_a_typed_one_is_not() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open_batch();
+
+        let mut terminal = Terminal::new(TestBackend::new(130, 40)).expect("test backend");
+        terminal.draw(|frame| draw(frame, &tui)).expect("draw");
+        let painted: String =
+            terminal.backend().buffer().content().iter().map(ratatui::buffer::Cell::symbol).collect();
+
+        let batch = tui.batch.as_ref().expect("a table");
+        let brackets = painted.matches(CYCLE_LEFT).count();
+        assert_eq!(brackets, painted.matches(CYCLE_RIGHT).count(), "every bracket opens and closes");
+
+        // One pair per pickable cell, and pickability is the batch's own
+        // answer — the markers may not claim a list `cycle` does not have.
+        let pickable = (0..batch.rows.len())
+            .flat_map(|row| (0..super::super::BATCH_COLUMNS.len()).map(move |column| (row, column)))
+            .filter(|(row, column)| !batch.options_at(*row, *column).is_empty())
+            .count();
+        assert_eq!(brackets, pickable, "a bracketed cell is exactly one `cycle` acts on");
+        assert!(pickable > 0, "the panel has pickable cells at all");
+    }
+
+    /// A citation is longer than the figures it backs, so printing it cost
+    /// them their room and got clipped mid-token anyway. It belongs in
+    /// `data/reference/README.md`, and this is what keeps it from drifting
+    /// back onto the screen.
+    #[test]
+    fn the_provenance_table_carries_the_figures_and_not_the_citation() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open(Some(Screen::Plan));
+        tui.open(Some(Screen::Soil));
+        let inspection = tui.inspection.as_ref().expect("LOT-001 should inspect");
+
+        let cited: Vec<&str> = inspection
+            .provenance
+            .iter()
+            .filter_map(|entry| entry.critical_level.as_ref())
+            .map(|level| level.source.as_str())
+            .chain(
+                inspection
+                    .provenance
+                    .iter()
+                    .filter_map(|entry| entry.removal_reference.as_ref())
+                    .map(|removal| removal.source.as_str()),
+            )
+            .collect();
+        assert!(!cited.is_empty(), "the fixture has to carry citations for this to be worth asserting");
+
+        let rendered: Vec<String> = provenance_table(&tui, inspection, 96)
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+        let page = rendered.join("\n");
+        for source in cited {
+            assert!(!page.contains(source), "the citation `{source}` is back on screen");
+        }
+
+        // What the block is actually for: one row per nutrient, every one
+        // the same width, still carrying the thresholds and the extraction
+        // that decides which set of them applies.
+        assert_eq!(rendered.len(), inspection.provenance.len() + 1, "a header and one row per nutrient");
+        let widths: Vec<usize> = rendered.iter().map(|line| line.chars().count()).collect();
+        assert!(widths.iter().all(|w| *w == widths[0]), "a ragged row means a cell overflowed its column: {widths:?}");
+        assert!(widths[0] <= 96, "the table must fit the panel it was given");
+        assert!(page.contains("Olsen"), "the extraction method is a lookup axis, not provenance, and stays");
+    }
+
+    /// The buy table has to fit the panel it is given. The shared
+    /// fixed-width text did not: at 94 columns it lost whole columns off
+    /// the right edge of an 80-column terminal, silently.
+    #[test]
+    fn the_buy_table_gives_up_columns_before_it_overflows() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open(Some(Screen::Sources));
+        let report = tui.recommendation.as_ref().expect("the fixture has to produce a program to lay out");
+
+        let widest = |width| {
+            buy_table(&tui, report, width)
+                .iter()
+                .map(|line| line.spans.iter().map(|span| span.content.chars().count()).sum::<usize>())
+                .max()
+                .unwrap_or(0)
+        };
+        let mut previous = 0;
+        for width in [40_u16, 60, 80, 100, 130] {
+            let painted = widest(width);
+            assert!(painted <= width as usize, "a {width}-wide panel got a {painted}-wide line");
+            // Every row of one rendering is the same width, so a ragged
+            // table would show up as a shorter `max` than the header's.
+            assert!(painted >= previous, "widening the panel must not show less");
+            previous = painted;
+        }
+        // The point of the whole thing: at the width the workspace actually
+        // has, the table still carries what to buy and how much.
+        // The original bug, and the one this cannot regress into: a cell
+        // wider than its column used to push every figure after it right,
+        // so that row alone ran long and no column read straight down.
+        let table = buy_table(&tui, report, 80);
+        for line in &table {
+            let painted: usize = line.spans.iter().map(|span| span.content.chars().count()).sum();
+            assert_eq!(painted, widest(80), "every row lines up under the header");
+        }
+        assert!(table.len() >= report.chosen.lines.len() + 2, "a header, every product, and the total");
+    }
+
     /// The cell cursor has to be visible on the two columns you open the
     /// table to fill. It was not: reverse video on a zero-length span
     /// paints nothing, so `value` and `method` — empty until typed — looked
@@ -2275,9 +3091,16 @@ mod tests {
 
         for (column, name) in super::super::BATCH_COLUMNS.iter().enumerate().skip(1).map(|(i, id)| (i, *id)) {
             tui.batch.as_mut().expect("a table").col = column;
+            // A pickable column spends two of its width on the brackets,
+            // which are chrome and deliberately stay outside the highlight:
+            // what the cursor lights is the value it is about to change.
+            let chrome = {
+                let batch = tui.batch.as_ref().expect("a table");
+                if batch.options_at(batch.row, column).is_empty() { 0 } else { 2 }
+            };
             assert_eq!(
                 lit(&tui),
-                BATCH_WIDTHS[column] as usize,
+                BATCH_WIDTHS[column] as usize - chrome,
                 "`{name}` must light its whole cell, full or empty"
             );
         }
@@ -2523,7 +3346,111 @@ mod tests {
         assert_eq!(glyphs(500.0, 100.0), "████", "over-100% must clamp, not panic");
         assert_eq!(glyphs(10.0, 0.0), "░░░░", "no demand must not divide by zero");
     }
+
+    /// A regional profile ships its catalog in that region's language, and
+    /// the interface is not obliged to be in it. Almost none of that
+    /// catalog is a trade name — a compound with an exact English name,
+    /// printed in Spanish under an English interface, is a gap.
+    ///
+    /// Both halves matter: a product with a translation reads translated,
+    /// and one without still reads as the catalog wrote it rather than as
+    /// a key with the underscores knocked out.
+    #[test]
+    fn a_product_is_named_in_the_readers_language_or_the_catalogs() {
+        let tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+
+        assert_eq!(product_name(&tui, "oxido_de_zinc", "Óxido de zinc"), "Zinc oxide");
+        // Four hundred formula rows are deliberately untranslated: the
+        // grade is their identity and it is already a column.
+        assert_eq!(
+            product_name(&tui, "npk_edafico_18_22_2_3s", "NPK edáfico 18-22-2-3S"),
+            "NPK edáfico 18-22-2-3S"
+        );
+        // Never the id itself, which is what `term` alone would give.
+        assert_eq!(product_name(&tui, "a_product_no_bundle_knows", "Producto X"), "Producto X");
+    }
+
+    /// Stage ⑤ is the page somebody reads once and walks into the field
+    /// with, so it has to close the scenario on its own: the totals, the
+    /// balance, what the readings mean, and what to buy.
+    ///
+    /// The interpretation block is the load-bearing half. It states the
+    /// bands the plan classified against, and those must be the ones
+    /// `classify` actually cuts on — `low` and `medium`. A row advertising
+    /// a boundary no reading is ever compared to is worse than no row.
+    #[test]
+    fn the_plan_page_closes_the_scenario_and_shows_the_bands_it_judged_by() {
+        let mut tui = Tui::new(bootstrap::build_app_from_repo_data(), crate::infra::tui_settings::TuiSettings::default(), None);
+        tui.open(Some(Screen::Plan));
+        tui.open(Some(Screen::Soil));
+        tui.screen = Screen::Plan;
+        let plan = tui.plan.clone().expect("LOT-001/corn/global should plan");
+        let inspection = tui.inspection.clone().expect("and inspect");
+
+        let out = render(&tui, 130, 60);
+        for id in ["st_total", "col_balance", "plan_interpretation", "sources_program"] {
+            assert!(out.contains(tui.i18n.t(id)), "the plan page dropped its `{id}` block");
+        }
+
+        let text = |lines: Vec<Line>| -> Vec<String> {
+            lines.iter().map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect()).collect()
+        };
+        // The bar restated two columns of the row it closed, and needed a
+        // legend to say which two. Nothing on this table is a picture now.
+        let balance = text(balance_table(&tui, &plan, 96));
+        assert!(!balance.concat().contains(['█', '░']), "the balance bar is back: {balance:?}");
+        assert_eq!(balance.len(), plan.nutrient_results.len() + 1, "a header and one row per nutrient");
+
+        let judged: Vec<_> = plan
+            .nutrient_results
+            .iter()
+            .filter_map(|entry| {
+                let level = inspection
+                    .provenance
+                    .iter()
+                    .find(|prov| prov.nutrient == entry.nutrient)?
+                    .critical_level
+                    .as_ref()?;
+                Some((entry, level))
+            })
+            .collect();
+        assert!(!judged.is_empty(), "the fixture has to classify something for this to be worth asserting");
+
+        // Both widths: one has room for the scale and one does not, and
+        // the reading, its unit and the verdict are on every row either
+        // way. A reading without its unit cannot be checked at all, and
+        // dropping it to make room for a picture would be the trade this
+        // whole table exists to refuse.
+        for (width, draws) in [(110, true), (56, false)] {
+            let rendered = text(critical_table(&tui, &plan, &inspection, width));
+            assert_eq!(rendered.len(), judged.len() + 1, "a header and one row per nutrient at {width}");
+            let widths: Vec<usize> = rendered.iter().map(|row| row.chars().count()).collect();
+            assert!(widths.iter().all(|w| *w == widths[0]), "a ragged row at {width}: {widths:?}");
+            assert!(widths[0] <= width as usize, "a row ran off a {width}-wide panel: {widths:?}");
+
+            for (row, (entry, level)) in rendered[1..].iter().zip(&judged) {
+                let verdict = soil_status_span(&tui, entry.soil_status).content.to_string();
+                for shown in [level.unit.clone(), verdict] {
+                    assert!(row.contains(&shown), "`{shown}` is missing from `{row}`");
+                }
+                assert_eq!(
+                    row.contains('●'),
+                    draws,
+                    "a {width}-wide panel {} the scale: `{row}`",
+                    if draws { "has room for" } else { "does not have room for" }
+                );
+            }
+        }
+    }
 }
+
+
+
+
+
+
+
+
 
 
 

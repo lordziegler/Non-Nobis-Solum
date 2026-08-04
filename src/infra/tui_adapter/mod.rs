@@ -8,6 +8,7 @@
 pub mod i18n;
 pub mod theme;
 mod ui;
+mod viz;
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -34,8 +35,11 @@ use crate::infra::{csv_import, tui_settings, CachedAgroclimaticRepo, PrewarmedAg
 use i18n::{I18n, Language};
 use theme::Theme;
 
+/// Every screen the TUI can be on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
+    /// The launcher: the lot list, the module menu and system status. The
+    /// one screen `Esc` quits from rather than backing out of.
     Dashboard,
     /// Stage ①: the soil analysis behind the scenario.
     Soil,
@@ -47,10 +51,12 @@ pub enum Screen {
     Sources,
     /// Stage ⑤: the nutrient balance.
     Plan,
+    /// The form that registers a lot.
     NewLot,
     /// The same form as `NewLot`, prefilled from the selected lot and
     /// submitted through `edit_lot` instead of `register_lot`.
     EditLot,
+    /// The form that adds one lab reading to an existing lot.
     NewSample,
     /// The whole lab panel as one editable table: a row per nutrient, any
     /// number of them filled, written in a single pass.
@@ -58,6 +64,7 @@ pub enum Screen {
     /// Bulk entry: point at a CSV, get every row validated the way a typed
     /// one is.
     Import,
+    /// Preferences: language, theme, profile, strategy, bag weight.
     Settings,
 }
 
@@ -73,6 +80,15 @@ pub const STAGES: [(Screen, &str); 5] = [
     (Screen::Plan, "stage_plan"),
 ];
 
+/// Where a screen sits in the five-stage fertilization flow.
+///
+/// # Arguments
+/// * `screen` — the screen to locate.
+///
+/// # Returns
+/// Its zero-based position in [`STAGES`], or `None` for a screen outside
+/// the flow — which is what the stepper uses to decide not to draw itself.
+#[must_use]
 pub fn stage_index(screen: Screen) -> Option<usize> {
     STAGES.iter().position(|(stage, _)| *stage == screen)
 }
@@ -80,6 +96,7 @@ pub fn stage_index(screen: Screen) -> Option<usize> {
 /// Which module a screen belongs to. Every stage belongs to the
 /// fertilization module, whose menu row targets the first of them — so the
 /// module column stays lit on stage ⑤ as much as on stage ①.
+#[must_use]
 pub fn module_screen(screen: Screen) -> Screen {
     match stage_index(screen) {
         Some(_) => STAGES[0].0,
@@ -132,8 +149,11 @@ const YIELD_STEP: f64 = 0.1;
 /// escape is a screen people get stuck on. So the exit is a row you can
 /// land on, the same way a form's `[ Save ]` row is.
 pub const TARGET_ROWS: usize = 3;
+/// The row carrying the yield goal itself.
 pub const TARGET_ROW_GOAL: usize = 0;
+/// The row carrying the demand basis, extraction or absorption.
 pub const TARGET_ROW_BASIS: usize = 1;
+/// The row that leaves the stage.
 pub const TARGET_ROW_CONTINUE: usize = 2;
 
 /// In `LotRegistration` field order; label ids map to that struct.
@@ -282,14 +302,11 @@ impl SampleBatch {
     fn new(field_id: String, existing: &[SoilTest]) -> Self {
         let rows = soil_test_nutrients()
             .into_iter()
-            .map(|nutrient| match existing.iter().find(|t| t.layer.from_cm == 0.0 && t.nutrient.to_string() == nutrient) {
-                Some(test) => {
-                    [nutrient, test.value.to_string(), test.unit.clone(), test.method.clone(), test.layer.to_cm.to_string()]
-                }
-                None => {
-                    let unit = customary_unit(&nutrient).to_string();
-                    [nutrient, String::new(), unit, String::new(), BATCH_DEFAULT_DEPTH_CM.to_string()]
-                }
+            .map(|nutrient| if let Some(test) = existing.iter().find(|t| t.layer.from_cm == 0.0 && t.nutrient.to_string() == nutrient) {
+                [nutrient, test.value.to_string(), test.unit.clone(), test.method.clone(), test.layer.to_cm.to_string()]
+            } else {
+                let unit = customary_unit(&nutrient).to_string();
+                [nutrient, String::new(), unit, String::new(), BATCH_DEFAULT_DEPTH_CM.to_string()]
             })
             .collect();
         Self { field_id, rows, row: 0, col: BATCH_FIRST_CELL, editing: false }
@@ -324,22 +341,33 @@ impl SampleBatch {
     /// customarily read with — the first `l` offers it, which is one press
     /// for the common case and still an act rather than a default.
     fn cycle(&mut self, delta: isize) {
-        let Some(row) = self.rows.get(self.row) else { return };
-        // The method list is this row's nutrient's own; the first entry is
-        // what that nutrient is customarily read with, which is what an
-        // empty cell lands on.
-        let options: &[&str] = match self.col {
-            BATCH_COL_UNIT => &SOIL_TEST_UNITS,
-            BATCH_COL_METHOD => methods_for(&row[0]),
-            _ => return,
-        };
-        let next = match options.iter().position(|option| *option == row[self.col]) {
+        let options = self.options_at(self.row, self.col);
+        // The first entry is what that nutrient is customarily read with,
+        // which is what an empty cell lands on.
+        let Some(&first) = options.first() else { return };
+        let next = match options.iter().position(|option| *option == self.rows[self.row][self.col]) {
             Some(current) => options[(current + if delta < 0 { options.len() - 1 } else { 1 }) % options.len()],
-            None => options[0],
+            None => first,
         }
         .to_string();
         if let Some(cell) = self.cell() {
             *cell = next;
+        }
+    }
+
+    /// The list `h`/`l` cycles on one cell, empty for a cell that is typed
+    /// rather than picked. The method list is that row's nutrient's own.
+    ///
+    /// The single place that decides which cells are pickable, so the
+    /// table's own markers cannot drift from what [`Self::cycle`] acts on
+    /// — a cell that advertises a list it does not have is worse than one
+    /// that advertises nothing.
+    fn options_at(&self, row: usize, column: usize) -> &'static [&'static str] {
+        let Some(row) = self.rows.get(row) else { return &[] };
+        match column {
+            BATCH_COL_UNIT => &SOIL_TEST_UNITS,
+            BATCH_COL_METHOD => methods_for(&row[0]),
+            _ => &[],
         }
     }
 
@@ -441,7 +469,7 @@ fn customary_unit(nutrient: &str) -> &'static str {
 
 /// That nutrient's methods plus the row that starts typing.
 fn lab_method_options(nutrient: &str) -> Vec<String> {
-    methods_for(nutrient).iter().map(|m| m.to_string()).chain([TYPE_IT_IN.to_string()]).collect()
+    methods_for(nutrient).iter().map(std::string::ToString::to_string).chain([TYPE_IT_IN.to_string()]).collect()
 }
 
 /// Every nutrient except N: N availability is derived from organic matter,
@@ -604,6 +632,16 @@ struct PlanKey {
     climate_ready: bool,
 }
 
+// The flags are independent UI states, not a mode enum in disguise: a
+// filtered list can be focused on either pane while a form is open. Folding
+// them into one enum would have to enumerate the legal combinations, which
+// is more states than the flags have.
+/// The whole terminal front-end's state.
+///
+/// One struct rather than a screen-per-type hierarchy: the screens share
+/// the selected lot, the loaded plan and the settings, and threading those
+/// through a trait object would buy nothing a field does not already do.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Tui {
     cfg: Composition,
     /// Fetched off the render loop. `None` disables climate entirely.
@@ -686,9 +724,25 @@ pub struct Tui {
     /// make `is_error` lie to everything that checks it.
     is_warning: bool,
     help: bool,
+    /// Which nutrient's efficiency the inspector is open on, if it is.
+    ///
+    /// An index into `plan.nutrient_results` rather than a nutrient,
+    /// because it is what `j`/`k` step and what a recalculated plan
+    /// invalidates — a stale nutrient would outlive a plan that no longer
+    /// carries it.
+    inspecting: Option<usize>,
     running: bool,
 }
 
+/// Runs the terminal front-end until the user leaves it, restoring the
+/// terminal on the way out whichever way the loop ends.
+///
+/// # Errors
+/// `DataSource` when the terminal cannot be put into (or taken out of) raw
+/// mode and the alternate screen, or when a draw or a key read fails —
+/// every one of them an `std::io::Error` from the terminal itself.
+/// Unreadable settings are not an error: they fall back to the defaults and
+/// are reported in the status bar.
 pub fn run(cfg: Composition) -> Result<(), DomainError> {
     // Preferences are read here, not in `Tui::new`: a constructor that
     // reaches for the user's config file cannot be exercised by a test
@@ -711,6 +765,10 @@ pub fn run(cfg: Composition) -> Result<(), DomainError> {
 }
 
 impl Tui {
+    // Takes the loaded settings by value because it is where they come to
+    // rest: the fields are moved into the `Tui`, and the caller has no use
+    // for the struct afterwards.
+    #[allow(clippy::needless_pass_by_value)]
     fn new(
         mut cfg: Composition,
         settings: tui_settings::TuiSettings,
@@ -720,7 +778,7 @@ impl Tui {
         // decides which reference files that read opens.
         let profiles = cfg.profiles();
         if profiles.contains(&settings.profile) {
-            cfg.profile = settings.profile.clone();
+            settings.profile.clone_into(&mut cfg.profile);
         }
 
         let mut tui = Self {
@@ -779,6 +837,7 @@ impl Tui {
             is_error: false,
             is_warning: false,
             help: false,
+            inspecting: None,
             running: true,
         };
         tui.reload();
@@ -1010,7 +1069,30 @@ impl Tui {
         cache.cached(latitude, longitude).is_some()
     }
 
-    /// Enter on stage ⑤ means "run it again", which a cached answer would
+    /// Opens the efficiency inspector on the first nutrient that has an
+    /// efficiency worth explaining.
+    ///
+    /// Silent when there is no plan: a key that does nothing is better
+    /// than an empty panel over a page that was saying something.
+    fn open_inspector(&mut self) {
+        if self.plan.as_ref().is_some_and(|plan| !plan.nutrient_results.is_empty()) {
+            self.inspecting = Some(0);
+        }
+    }
+
+    /// The inspector owns every key while it is open, so nothing behind it
+    /// moves under a panel the reader cannot see past.
+    fn on_inspector_key(&mut self, code: KeyCode) {
+        let count = self.plan.as_ref().map_or(0, |plan| plan.nutrient_results.len());
+        let Some(index) = self.inspecting else { return };
+        match code {
+            KeyCode::Char('j') | KeyCode::Down if count > 0 => self.inspecting = Some(step(index, count, 1)),
+            KeyCode::Char('k') | KeyCode::Up if count > 0 => self.inspecting = Some(step(index, count, -1)),
+            _ => self.inspecting = None,
+        }
+    }
+
+    /// `r` on stage ⑤ means "run it again", which a cached answer would
     /// quietly refuse. Dropping the key is what makes it a real re-run.
     fn recalculate(&mut self) {
         self.plan_key = None;
@@ -1116,7 +1198,7 @@ impl Tui {
                     // lot is picked, never spelled out.
                     ("form_field_id", self.lots.iter().map(|lot| lot.field_id.clone()).collect()),
                     ("form_nutrient", soil_test_nutrients()),
-                    ("form_unit", SOIL_TEST_UNITS.iter().map(|unit| unit.to_string()).collect()),
+                    ("form_unit", SOIL_TEST_UNITS.iter().map(std::string::ToString::to_string).collect()),
                     // Rebuilt the moment a nutrient is picked — see
                     // `commit_picker`. Until then the form has no nutrient
                     // to narrow them by.
@@ -1248,9 +1330,9 @@ impl Tui {
             let dir = if current.is_dir() {
                 current
             } else {
-                current.parent().filter(|p| p.is_dir()).map(|p| p.to_path_buf()).unwrap_or_else(|| {
+                current.parent().filter(|p| p.is_dir()).map_or_else(|| {
                     import_start_dir(&self.cfg.data_root)
-                })
+                }, std::path::Path::to_path_buf)
             };
             return self.open_browser(&dir);
         }
@@ -1492,6 +1574,11 @@ impl Tui {
 
     // ---- input -----------------------------------------------------------
 
+    // The arms that share a body reach it under different guards, and each
+    // carries the comment explaining which screen it serves. Merging them
+    // by body would drop that, and match order is what makes the guards
+    // resolve correctly in the first place.
+    #[allow(clippy::match_same_arms)]
     fn on_key(&mut self, key: KeyEvent) {
         // Any key that is not the delete key disarms a pending one, so an
         // armed deletion can never survive a detour and fire on a lot the
@@ -1512,6 +1599,11 @@ impl Tui {
         if self.help {
             self.help = false;
             return;
+        }
+        // On top of the page and eating keys first, the way the picker
+        // sits on top of the form.
+        if self.inspecting.is_some() {
+            return self.on_inspector_key(code);
         }
         if self.filtering {
             return self.on_filter_key(code);
@@ -1539,10 +1631,14 @@ impl Tui {
         let in_target = self.screen == Screen::Target && in_workspace;
         match code {
             KeyCode::Char('?') => self.help = true,
+            // "Run it again", which used to be Enter's second meaning on
+            // the last stage. Its own key now, and only where it means
+            // something.
+            KeyCode::Char('r') if self.screen == Screen::Plan && in_workspace => self.recalculate(),
             // Home has one pane, so there is nothing to hand the cursor to:
             // a `Tab` there would light a lot column that is not drawn.
             KeyCode::Tab | KeyCode::BackTab if self.screen != Screen::Dashboard => {
-                self.focus_modules = !self.focus_modules
+                self.focus_modules = !self.focus_modules;
             }
             // `s` saves what is being filled in, from anywhere on the
             // screen filling it. The save row and the last cell still
@@ -1580,7 +1676,7 @@ impl Tui {
             // Only from the lot list, where the lot being deleted is the one
             // under the cursor and on screen.
             KeyCode::Char('x') if self.screen == Screen::Dashboard || self.focus_modules => {
-                self.delete_selected_lot()
+                self.delete_selected_lot();
             }
             KeyCode::Char('h') | KeyCode::Left if in_workspace => self.go_to_stage(-1),
             KeyCode::Char('l') | KeyCode::Right if in_workspace => self.go_to_stage(1),
@@ -1596,7 +1692,7 @@ impl Tui {
             // and stays on the lot list, where the lot it deletes is on
             // screen under the cursor.
             KeyCode::Char(c @ ('n' | 'c' | 'e' | 'a' | 'b' | 'i' | ',')) if self.focus_modules || self.screen == Screen::Dashboard => {
-                self.lot_action(c)
+                self.lot_action(c);
             }
             _ => {}
         }
@@ -1839,10 +1935,7 @@ impl Tui {
     /// `ui::draw` — the one thing that file writes.
     fn scroll_by(&mut self, delta: isize) {
         let last = self.content_height.get().saturating_sub(self.viewport_height.get());
-        self.scroll = match delta < 0 {
-            true => self.scroll.saturating_sub(1),
-            false => self.scroll.saturating_add(1).min(last),
-        };
+        self.scroll = if delta < 0 { self.scroll.saturating_sub(1) } else { self.scroll.saturating_add(1).min(last) };
     }
 
     fn activate(&mut self) {
@@ -1883,7 +1976,10 @@ impl Tui {
             // "run it again", which is what a changed input wants — and
             // what the cached plan has to stand aside for.
             Screen::Soil | Screen::Target | Screen::Sources => self.go_to_stage(1),
-            Screen::Plan => self.recalculate(),
+            // The last stage has no next one, so Enter is free for the one
+            // thing this page cannot say in a column: why the efficiency
+            // is what it is, which is why the dose is what it is.
+            Screen::Plan => self.open_inspector(),
         }
     }
 
@@ -1895,6 +1991,10 @@ impl Tui {
         self.screen = screen;
         self.focus_modules = false;
         self.scroll = 0;
+        // The inspector explains one plan's figures. Leaving the page it
+        // belongs to closes it rather than leaving it hanging over the
+        // next one.
+        self.inspecting = None;
         // Stage ③ always opens on the goal: it is the thing the flow came
         // here for, and the basis has a working default.
         if screen == Screen::Target {
@@ -2015,6 +2115,11 @@ impl Tui {
                 self.recalculate_recommendation();
             }
             "settings_bag" => {
+                // Exact comparison is what this needs: the three weights are
+                // integers exactly representable in `f64`, and the stored
+                // value is either one of them or a hand-edited settings file,
+                // which `unwrap_or(0)` deliberately snaps back to the first.
+                #[allow(clippy::float_cmp)]
                 let current =
                     BAG_WEIGHTS_KG.iter().position(|kg| *kg == self.formulation.bag_weight_kg).unwrap_or(0);
                 let len = BAG_WEIGHTS_KG.len();
@@ -2050,6 +2155,10 @@ impl Tui {
         self.is_warning = true;
     }
 
+    // Consumes the error on purpose: reaching the status bar is where a
+    // `DomainError` stops. Borrowing would leave the caller holding one it
+    // has already reported.
+    #[allow(clippy::needless_pass_by_value)]
     fn fail(&mut self, error: DomainError) {
         self.message = error.to_string();
         self.is_error = true;
@@ -2072,6 +2181,8 @@ fn step(index: usize, len: usize, delta: isize) -> usize {
     }
 }
 
+// A conversion, so it consumes its input like any other `From`-shaped one.
+#[allow(clippy::needless_pass_by_value)]
 fn io_error(error: std::io::Error) -> DomainError {
     DomainError::DataSource(error.to_string())
 }
@@ -2769,6 +2880,39 @@ mod tests {
         assert_eq!(before, after, "nothing is written until the table is committed");
     }
 
+    /// The one figure on stage ⑤ that a reader cannot check from the page:
+    /// efficiency divides the requirement, so it moves what somebody buys
+    /// more than anything else there, and the table has room for a
+    /// percentage and nothing else.
+    ///
+    /// The panel owns every key while it is open. Anything else and `j`
+    /// would walk a list the reader cannot see past it.
+    #[test]
+    fn the_inspector_opens_on_the_plan_and_owns_its_keys() {
+        let mut tui = tui();
+        tui.open(Some(Screen::Plan));
+        let nutrients = tui.plan.as_ref().expect("a plan").nutrient_results.len();
+        assert!(nutrients > 1, "walking needs somewhere to walk to");
+
+        let scroll = tui.scroll;
+        press(&mut tui, KeyCode::Enter);
+        assert_eq!(tui.inspecting, Some(0), "Enter on the last stage opens the explanation");
+
+        press(&mut tui, KeyCode::Char('j'));
+        assert_eq!(tui.inspecting, Some(1), "j walks nutrients inside the panel");
+        assert_eq!(tui.scroll, scroll, "and nothing behind it moved");
+
+        press(&mut tui, KeyCode::Esc);
+        assert_eq!(tui.inspecting, None, "Esc closes it");
+
+        // Leaving the page closes it too: it explains one plan's figures,
+        // and the next page's are not those.
+        press(&mut tui, KeyCode::Enter);
+        assert!(tui.inspecting.is_some());
+        press(&mut tui, KeyCode::Char('h'));
+        assert_eq!(tui.inspecting, None, "walking off stage 5 leaves nothing hanging over stage 4");
+    }
+
     /// Stages ④ and ⑤ are two halves of one result, and walking from one
     /// to the other used to pay for the whole calculation twice.
     #[test]
@@ -2787,8 +2931,10 @@ mod tests {
             "stage 5 asked the question stage 4 had already answered"
         );
 
-        // Enter on the last stage still means "run it again".
-        press(&mut tui, KeyCode::Enter);
+        // "Run it again" is `r` since Enter took over the inspector on
+        // this stage; what the key is matters less than that it drops the
+        // cached answer rather than handing it back.
+        press(&mut tui, KeyCode::Char('r'));
         assert_ne!(tui.plan.as_ref().expect("a plan").mineralization_factor, -1.0);
 
         // And a different question is a different plan.
