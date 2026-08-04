@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Non Nobis Solum
+GenericName=Fertility Planner
+Comment=Fertilization plans from soil analysis and crop removal coefficients
+Exec=nns-tui
+Terminal=true
+Categories=Science;Education;
+Keywords=soil;fertility;fertilizer;agronomy;agriculture;liming;
