@@ -8,6 +8,12 @@
 //! `core::domain::formulation` pin the arithmetic; this pins that the
 //! arithmetic is fed the right numbers.
 
+// An integration test is its own crate, so it does not inherit the library
+// root's suppressions and states them again. Both are assertion-only: exact
+// comparison against values the source tables give exactly, and a bag count
+// widened to `f64` to be compared with the unrounded figure it came from.
+#![allow(clippy::float_cmp, clippy::cast_precision_loss)]
+
 use std::path::Path;
 
 use non_nobis_solum::core::application::FormulationRequest;
@@ -23,8 +29,8 @@ use non_nobis_solum::infra::{report_renderer, PdfReportExporter};
 /// `P2O5_to_P` and `K2O_to_K` from `conversion_factors.toml`. The plan
 /// states P and K elementally, so the mandatory case's visible-basis
 /// figures have to be entered the way the balance would have produced them.
-const P2O5_TO_P: f64 = 0.4364267631;
-const K2O_TO_K: f64 = 0.8301513890;
+const P2O5_TO_P: f64 = 0.436_426_763_1;
+const K2O_TO_K: f64 = 0.830_151_389_0;
 
 /// The workflow's mandatory numeric case: N 84.08, P2O5 96.18, K2O 20.09.
 fn mandatory_plan() -> FertilityPlan {
@@ -126,8 +132,8 @@ fn the_mandatory_case_reaches_the_workflows_own_target_grade() {
     assert_eq!(ratio.target.label(), "10-13-3");
 
     let coefficients = ratio.target.coefficients();
-    assert!((coefficients.n_over_p.expect("N/P") - 0.769230).abs() < 1e-5);
-    assert!((coefficients.p_over_k.expect("P/K") - 4.333333).abs() < 1e-5);
+    assert!((coefficients.n_over_p.expect("N/P") - 0.769_230).abs() < 1e-5);
+    assert!((coefficients.p_over_k.expect("P/K") - 4.333_333).abs() < 1e-5);
 }
 
 /// The catalog's own 13-26-6-3S, read off `fertilizer_sources.csv` where P
@@ -147,7 +153,7 @@ fn a_catalog_row_stored_elementally_is_scored_as_its_printed_grade() {
     let control = non_nobis_solum::core::domain::CommercialGrade::new(13.0, 26.0, 6.0, 3.0);
     let coefficients = control.coefficients();
     assert!((coefficients.n_over_p.expect("N/P") - 0.5).abs() < 1e-9);
-    assert!((coefficients.p_over_k.expect("P/K") - 4.333333).abs() < 1e-5);
+    assert!((coefficients.p_over_k.expect("P/K") - 4.333_333).abs() < 1e-5);
     assert!(
         (target.coefficients().p_over_k.expect("P/K") - coefficients.p_over_k.expect("P/K")).abs() < 1e-5,
         "the control product matches the target on P/K exactly — that is why it is the control"

@@ -23,12 +23,20 @@ use crate::core::ports::RegisterLotPort;
 /// says what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportKind {
+    /// A file of lots, which also opens each lot's first planning row.
     Lots,
+    /// A file of lab readings, appended to lots that already exist.
     SoilTests,
+    /// A file of planning rows: a goal per lot and crop.
     YieldTargets,
 }
 
 impl ImportKind {
+    /// The shape's name as a report prints it.
+    ///
+    /// # Returns
+    /// A short plural noun phrase, in English.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             ImportKind::Lots => "lots",
@@ -44,10 +52,10 @@ impl ImportKind {
     fn detect(header: &csv::StringRecord) -> Option<Self> {
         let has = |name: &str| header.iter().any(|column| column.trim() == name);
         match () {
-            _ if has("nutrient_id") => Some(ImportKind::SoilTests),
-            _ if has("texture") => Some(ImportKind::Lots),
-            _ if has("yield_value") => Some(ImportKind::YieldTargets),
-            _ => None,
+            () if has("nutrient_id") => Some(ImportKind::SoilTests),
+            () if has("texture") => Some(ImportKind::Lots),
+            () if has("yield_value") => Some(ImportKind::YieldTargets),
+            () => None,
         }
     }
 }
@@ -56,13 +64,21 @@ impl ImportKind {
 /// changed nothing has to be as visible as one that changed everything.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportReport {
+    /// Which of the three shapes the file turned out to be.
     pub kind: ImportKind,
+    /// How many rows were written.
     pub accepted: usize,
     /// Row number (as the file counts them, header = 1) and why.
     pub rejected: Vec<(usize, String)>,
 }
 
 impl ImportReport {
+    /// The report in one line, for a status bar or a CLI run.
+    ///
+    /// # Returns
+    /// What was accepted, and what was rejected if anything was — a run
+    /// that changed nothing says so as loudly as one that changed a lot.
+    #[must_use]
     pub fn summary(&self) -> String {
         let mut text = format!("{} {} accepted", self.accepted, self.kind.as_str());
         if !self.rejected.is_empty() {
@@ -84,6 +100,13 @@ impl ImportReport {
 /// accepted rows written, which is what "append-only, last row wins" makes
 /// safe — re-importing a corrected file supersedes rather than duplicates,
 /// except for lots, where a duplicate id is refused by name.
+///
+/// # Errors
+/// `InvalidInput` when the file is none of the three recognised shapes, or
+/// is the app's own curated output being imported into itself;
+/// `DataSource` when the file cannot be read. A row that fails validation
+/// is *not* an error: it lands in the report's rejection list, by line
+/// number, and the remaining rows are still written.
 pub fn import(path: &Path, use_case: &dyn RegisterLotPort) -> Result<ImportReport, DomainError> {
     // Importing the app's own output into itself is never what anyone
     // means, and it is one keystroke away: the file browser lists

@@ -14,7 +14,7 @@ pub const BASELINE_MINERALIZATION_FACTOR: f64 = 0.015;
 /// Upper bound of the admissible annual mineralization rate (the workflow
 /// reference gives `f` as 0.00–0.30).
 ///
-/// AGRONOMIC_NOTE: this is a guard on the model's output, not a target it
+/// `AGRONOMIC_NOTE`: this is a guard on the model's output, not a target it
 /// is expected to reach. Temperature and water alone cannot carry a soil
 /// from the 1.5% average to 30% — the top of that range belongs to fresh
 /// labile organic inputs (green manure, recent residue incorporation,
@@ -25,7 +25,7 @@ pub const MAX_MINERALIZATION_FACTOR: f64 = 0.30;
 /// Temperature at which the mineralization response equals 1.0, i.e.
 /// where [`BASELINE_MINERALIZATION_FACTOR`] applies unmodified.
 ///
-/// AGRONOMIC_NOTE: 20 °C, not the 25 °C this used to assume. 25 °C is the
+/// `AGRONOMIC_NOTE`: 20 °C, not the 25 °C this used to assume. 25 °C is the
 /// rough *optimum* for tropical mineralization, and anchoring an average
 /// at an optimum makes every site on Earth read below average. 20 °C is a
 /// mean growing-season temperature for which 1.5%/yr is a defensible
@@ -49,18 +49,21 @@ const WATERLOGGING_DECLINE_PER_INDEX: f64 = 0.25;
 
 /// Mass of dry soil per hectare down to the arable depth, in kg/ha.
 /// `bulk_density_kg_dm3` is DAP (apparent density, kg/dm3 == g/cm3).
+#[must_use]
 pub fn soil_weight_kg_ha(bulk_density_kg_dm3: f64, arable_depth_m: f64) -> f64 {
     bulk_density_kg_dm3 * arable_depth_m * 10_000_000.0
 }
 
 /// Nutrient available in the soil, in kg/ha, from a concentration
 /// already expressed in mg/kg.
+#[must_use]
 pub fn availability_kg_ha(concentration_mg_kg: f64, soil_weight_kg_ha: f64) -> f64 {
     concentration_mg_kg * soil_weight_kg_ha / 1_000_000.0
 }
 
 /// Total nitrogen content of the soil, as a percent, estimated from
 /// organic matter (MO): `N_total = MO / 20`.
+#[must_use]
 pub fn nitrogen_total_percent(organic_matter_percent: f64) -> f64 {
     organic_matter_percent / 20.0
 }
@@ -72,12 +75,14 @@ pub fn nitrogen_total_percent(organic_matter_percent: f64) -> f64 {
 /// mineralize annually (e.g. 0.015 for 1.5%). Unlike other nutrients, N
 /// has no soil-test-based availability path — it's derived entirely from
 /// MO, matching the prototype (`n.py`) and the workflow reference.
+#[must_use]
 pub fn nitrogen_available_kg_ha(organic_matter_percent: f64, mineralization_factor: f64, soil_weight_kg_ha: f64) -> f64 {
     nitrogen_total_percent(organic_matter_percent) / 100.0 * mineralization_factor * soil_weight_kg_ha
 }
 
 /// Total crop removal/uptake for the yield target, in kg/ha, given a
-/// reference coefficient expressed per unit of yield (e.g. kg N per t_ha).
+/// reference coefficient expressed per unit of yield (e.g. kg N per `t_ha`).
+#[must_use]
 pub fn crop_removal_kg_ha(coefficient_kg_per_yield_unit: f64, yield_value: f64) -> f64 {
     coefficient_kg_per_yield_unit * yield_value
 }
@@ -86,6 +91,7 @@ pub fn crop_removal_kg_ha(coefficient_kg_per_yield_unit: f64, yield_value: f64) 
 /// needs and what the soil already supplies, inflated by the fraction of
 /// applied nutrient the crop can actually use (`efficiency_fraction`,
 /// e.g. 0.5 for 50%). Never negative.
+#[must_use]
 pub fn net_requirement_kg_ha(demand_kg_ha: f64, availability_kg_ha: f64, efficiency_fraction: f64) -> f64 {
     let gap = demand_kg_ha - availability_kg_ha;
     (gap / efficiency_fraction).max(0.0)
@@ -101,6 +107,7 @@ pub fn net_requirement_kg_ha(demand_kg_ha: f64, availability_kg_ha: f64, efficie
 /// unguarded division in `net_requirement_kg_ha` printed `inf kg/ha Urea`
 /// as a recommendation until session 9 caught it. The guard lives in the
 /// function so a second call site cannot reintroduce it.
+#[must_use]
 pub fn dose_kg_product_ha(net_requirement_kg_ha: f64, nutrient_pct_in_source: f64) -> Option<f64> {
     (nutrient_pct_in_source > 0.0).then(|| net_requirement_kg_ha / (nutrient_pct_in_source / 100.0))
 }
@@ -109,11 +116,13 @@ pub fn dose_kg_product_ha(net_requirement_kg_ha: f64, nutrient_pct_in_source: f6
 /// and base cations actually present, as opposed to `FieldContext`'s
 /// `cec_cmolc_kg` (CIC at pH 7, a different standard measurement — see
 /// the workflow reference for why the two are kept distinct).
+#[must_use]
 pub fn cation_exchange_capacity_effective(h: f64, al: f64, k: f64, mg: f64, ca: f64) -> f64 {
     h + al + k + mg + ca
 }
 
 /// Current base saturation, as a percent of CICE held by K⁺/Mg²⁺/Ca²⁺.
+#[must_use]
 pub fn base_saturation_pct(k: f64, mg: f64, ca: f64, cice: f64) -> f64 {
     if cice <= 0.0 {
         return 0.0;
@@ -124,6 +133,7 @@ pub fn base_saturation_pct(k: f64, mg: f64, ca: f64, cice: f64) -> f64 {
 /// Lime requirement, in t CaCO3-eq/ha, from exchangeable Al³⁺ toxicity.
 /// `al_factor` is a literature constant (e.g. ~1.5 for tropical soils —
 /// see `LimingRulesRepository`), not derived here.
+#[must_use]
 pub fn lime_requirement_from_aluminum_t_ha(al_cmolc_kg: f64, al_factor: f64) -> f64 {
     (al_factor * al_cmolc_kg).max(0.0)
 }
@@ -131,18 +141,21 @@ pub fn lime_requirement_from_aluminum_t_ha(al_cmolc_kg: f64, al_factor: f64) -> 
 /// Lime requirement, in t CaCO3-eq/ha, to raise base saturation from its
 /// current value to `target_base_saturation_pct`. Never negative — a soil
 /// already at or above target needs no lime by this method.
+#[must_use]
 pub fn lime_requirement_from_base_saturation_t_ha(cic_cmolc_kg: f64, current_base_saturation_pct: f64, target_base_saturation_pct: f64) -> f64 {
     (cic_cmolc_kg * (target_base_saturation_pct - current_base_saturation_pct) / 100.0).max(0.0)
 }
 
 /// Neutralizing value (EQ) of a liming material, as % CaCO3-equivalent,
 /// from its CaO/MgO content.
+#[must_use]
 pub fn neutralizing_value_pct(cao_pct: f64, mgo_pct: f64) -> f64 {
     cao_pct * 1.79 + mgo_pct * 2.48
 }
 
 /// PRNT (relative total neutralizing power): a material's neutralizing
 /// value discounted by how much of it is fine enough to actually react.
+#[must_use]
 pub fn prnt(neutralizing_value_pct: f64, granulometric_efficiency_pct: f64) -> f64 {
     neutralizing_value_pct * granulometric_efficiency_pct / 100.0
 }
@@ -153,17 +166,19 @@ pub fn prnt(neutralizing_value_pct: f64, granulometric_efficiency_pct: f64) -> f
 /// `None` for a material with no neutralizing power — see
 /// [`dose_kg_product_ha`] for why the guard is here and not at the call
 /// site.
+#[must_use]
 pub fn lime_material_dose_t_ha(caco3_eq_required_t_ha: f64, prnt_pct: f64) -> Option<f64> {
     (prnt_pct > 0.0).then(|| caco3_eq_required_t_ha / (prnt_pct / 100.0))
 }
 
 /// Aluminum saturation, as the percent of CICE held by exchangeable Al³⁺.
 ///
-/// AGRONOMIC_NOTE: the figure crop Al tolerance is actually stated
+/// `AGRONOMIC_NOTE`: the figure crop Al tolerance is actually stated
 /// against, and the one Tabla 12's acidity diagnosis keys on. A soil can
 /// carry 2 cmolc/kg of Al harmlessly at high CICE and toxically at low
 /// CICE, so the absolute Al reading on its own does not say whether roots
 /// are being damaged.
+#[must_use]
 pub fn aluminum_saturation_pct(al_cmolc_kg: f64, cice_cmolc_kg: f64) -> f64 {
     if cice_cmolc_kg <= 0.0 {
         return 0.0;
@@ -173,7 +188,7 @@ pub fn aluminum_saturation_pct(al_cmolc_kg: f64, cice_cmolc_kg: f64) -> f64 {
 
 /// The five cation balance ratios of Tabla 12's "balance de bases" block.
 ///
-/// AGRONOMIC_NOTE: these diagnose *antagonism*, which the per-nutrient
+/// `AGRONOMIC_NOTE`: these diagnose *antagonism*, which the per-nutrient
 /// critical levels cannot see. Ca, Mg and K compete for the same root
 /// uptake sites, so a soil can hold an adequate absolute level of every
 /// one of them and still starve the crop of potassium because calcium and
@@ -186,13 +201,32 @@ pub fn aluminum_saturation_pct(al_cmolc_kg: f64, cice_cmolc_kg: f64) -> f64 {
 /// shape, which is the worst kind of wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CationRatios {
+    /// Ca:Mg. The headline balance ratio; too wide starves magnesium.
     pub ca_to_mg: Option<f64>,
+    /// Mg:K. Read together with `k_to_mg` — the source table names bands
+    /// in both directions.
     pub mg_to_k: Option<f64>,
+    /// K:Mg, the reciprocal of `mg_to_k`.
     pub k_to_mg: Option<f64>,
+    /// Ca:K.
     pub ca_to_k: Option<f64>,
+    /// (Ca+Mg):K, the combined divalent-to-potassium ratio.
     pub ca_plus_mg_to_k: Option<f64>,
 }
 
+/// The five base-balance ratios of Tabla 12's "balance de bases" block.
+///
+/// # Arguments
+/// * `ca_cmolc_kg` — exchangeable calcium, cmolc/kg.
+/// * `mg_cmolc_kg` — exchangeable magnesium, cmolc/kg.
+/// * `k_cmolc_kg` — exchangeable potassium, cmolc/kg.
+///
+/// All three must be in cmolc/kg: the ratios of mg/kg values have the same
+/// shape and different numbers, which is the worst kind of wrong.
+///
+/// # Returns
+/// Each ratio, or `None` for any whose denominator is zero.
+#[must_use]
 pub fn cation_ratios(ca_cmolc_kg: f64, mg_cmolc_kg: f64, k_cmolc_kg: f64) -> CationRatios {
     // A cation the lab did not report arrives here as 0.0, and a ratio
     // over it is not "infinitely unbalanced", it is unknown.
@@ -208,6 +242,7 @@ pub fn cation_ratios(ca_cmolc_kg: f64, mg_cmolc_kg: f64, k_cmolc_kg: f64) -> Cat
 
 /// The band of a qualitative interpretation table containing `value`, or
 /// `None` where the table names none — see [`QualitativeBand`].
+#[must_use]
 pub fn classify_band(bands: &[QualitativeBand], value: f64) -> Option<&QualitativeBand> {
     bands.iter().find(|band| band.contains(value))
 }
@@ -219,7 +254,7 @@ pub fn classify_band(bands: &[QualitativeBand], value: f64) -> Option<&Qualitati
 /// Temperature response of mineralization, 1.0 at
 /// [`MINERALIZATION_REFERENCE_TEMP_C`], doubling per 10 °C.
 ///
-/// AGRONOMIC_NOTE: Q10 replaces the linear `T / 25` this used to be.
+/// `AGRONOMIC_NOTE`: Q10 replaces the linear `T / 25` this used to be.
 /// Microbial rates are exponential in temperature, and the linear form
 /// got the direction right but the magnitude wrong at both ends — it
 /// under-penalised cold soils and over-rewarded hot ones.
@@ -231,7 +266,7 @@ fn temperature_response(mean_temp_c: f64) -> f64 {
 /// (annual precipitation / annual ET0), peaking at 1.0 where rainfall
 /// just meets evaporative demand.
 ///
-/// AGRONOMIC_NOTE: unimodal, unlike the monotonic `P / 800` this used to
+/// `AGRONOMIC_NOTE`: unimodal, unlike the monotonic `P / 800` this used to
 /// be. Wetter is only better up to the point where the profile saturates;
 /// past it, anoxia stops the aerobic decomposition that mineralizes N, so
 /// a 3000 mm/yr site must not read as three times better than an 800 mm
@@ -256,6 +291,7 @@ fn water_response(aridity_index: f64) -> f64 {
 /// average. Water only limits under rainfed conditions: elsewhere the
 /// grower supplies what the rain doesn't, so an irrigated lot needs
 /// temperature alone.
+#[must_use]
 pub fn mineralization_factor(climate: &AnnualClimatology, irrigation: &IrrigationSystem) -> Option<f64> {
     let temperature = temperature_response(climate.mean_temp_c?);
     let water = match irrigation {
@@ -278,6 +314,7 @@ pub fn mineralization_factor(climate: &AnnualClimatology, irrigation: &Irrigatio
 /// TODO(gap): consume this in a real yield-gap use case, where a
 /// radiation-limited site should have its *yield target* questioned
 /// rather than its fertilizer dose adjusted.
+#[must_use]
 pub fn rue_index(solar_mj_m2_per_day: f64) -> f64 {
     (solar_mj_m2_per_day / 18.0).clamp(0.3, 1.0)
 }
@@ -289,12 +326,13 @@ pub fn rue_index(solar_mj_m2_per_day: f64) -> f64 {
 /// converted to mm/day water equivalent by the standard 0.408 factor
 /// (1 / 2.45 MJ per mm of vaporized water).
 ///
-/// AGRONOMIC_NOTE: Hargreaves is FAO-56's sanctioned fallback for when
+/// `AGRONOMIC_NOTE`: Hargreaves is FAO-56's sanctioned fallback for when
 /// the full Penman-Monteith inputs aren't available. It needs only
 /// temperature and Ra, and uses the diurnal range as a proxy for
 /// cloudiness and humidity. Feed it a *same-period* Tmax/Tmin pair: using
 /// an annual extreme spread instead of a within-month range inflates the
 /// square-root term and overstates ET0.
+#[must_use]
 pub fn reference_et0_hargreaves_mm_day(mean_temp_c: f64, max_temp_c: f64, min_temp_c: f64, extraterrestrial_mj_m2_per_day: f64) -> f64 {
     let range = (max_temp_c - min_temp_c).max(0.0);
     (0.0023 * (extraterrestrial_mj_m2_per_day * 0.408) * (mean_temp_c + 17.8) * range.sqrt()).max(0.0)
@@ -419,9 +457,9 @@ mod tests {
         // 13.17 C, 1036.6 mm/yr rain against 1495 mm/yr ET0, rainfed.
         // temperature = 2^((13.17-20)/10) = 0.6229
         // aridity     = 1036.6/1495.0     = 0.6934 -> water = 0.6934
-        // 0.015 * 0.6229 * 0.6934 -> ~0.006478.
+        // 0.015 * 0.6229 * 0.6934 -> ~0.006_478.
         let f = mineralization_factor(&climate(13.17, 1036.6, 1495.0), &IrrigationSystem::Rainfed).expect("full climatology");
-        assert!((f - 0.006478).abs() < 1e-5, "got {f}");
+        assert!((f - 0.006_478).abs() < 1e-5, "got {f}");
         // A cold, water-limited Andean lot must mineralize *less* than the
         // flat average the engine assumes when it knows nothing.
         assert!(f < BASELINE_MINERALIZATION_FACTOR);

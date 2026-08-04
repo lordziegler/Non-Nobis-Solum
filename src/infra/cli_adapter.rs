@@ -15,6 +15,7 @@ use crate::infra::{csv_import, report_export, report_renderer, shipped_data};
 
 #[derive(Parser)]
 #[command(name = "nns", version, about = "Fertilization plan engine driven by soil analysis and crop removal coefficients")]
+/// The command line, as clap parses it.
 pub struct Cli {
     /// Root of the data catalog. Defaults to $XDG_DATA_HOME/non-nobis-solum
     /// (~/.local/share/non-nobis-solum), created and seeded on first run.
@@ -36,6 +37,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+/// The subcommands `nns` accepts.
 pub enum Command {
     /// Calculate a full fertility plan for a lot/crop/yield scenario.
     Plan(PlanArgs),
@@ -55,6 +57,7 @@ pub enum Command {
 }
 
 #[derive(Args)]
+/// Arguments of `import`.
 pub struct ImportArgs {
     /// The CSV to read.
     #[arg(value_name = "FILE")]
@@ -62,6 +65,7 @@ pub struct ImportArgs {
 }
 
 #[derive(Args)]
+/// The lot, crop and goal every scenario-shaped subcommand needs.
 pub struct ScenarioArgs {
     /// Sample/lot identifier (used to look up both the soil test and the field context).
     #[arg(long)]
@@ -80,6 +84,8 @@ pub struct ScenarioArgs {
     /// Yield goal; when omitted, falls back to the curated yield target for this lot/crop.
     #[arg(long)]
     pub yield_value: Option<f64>,
+    /// The unit `yield_value` is stated in. Must match the unit the crop's
+    /// removal coefficients are stated per.
     #[arg(long, default_value = "t_ha")]
     pub yield_unit: String,
     /// Reference profile to trust for removal coefficients, efficiencies, etc.
@@ -92,7 +98,9 @@ pub struct ScenarioArgs {
 }
 
 #[derive(Args)]
+/// The lone `--profile` flag, for subcommands that need nothing else.
 pub struct ProfileArgs {
+    /// Reference profile to read the tables from.
     #[arg(long, default_value = "global")]
     pub profile: String,
 }
@@ -101,6 +109,7 @@ pub struct ProfileArgs {
 /// formulation knobs hang off it alone; `inspect` keeps the bare scenario.
 #[derive(Args)]
 pub struct PlanArgs {
+    /// The lot, crop and goal to plan for.
     #[command(flatten)]
     pub scenario: ScenarioArgs,
     /// How to cover the requirement. `composite_plus_simple` (default)
@@ -152,6 +161,13 @@ impl ScenarioArgs {
     }
 }
 
+/// Runs one CLI invocation: the single entry point `main` delegates to.
+///
+/// # Errors
+/// Whatever the selected subcommand's use case returns — `NotFound` for a
+/// lot, crop or goal that is not curated, `InvalidInput` for an argument
+/// that does not parse or a reading in an unconvertible unit, `DataSource`
+/// for a curated or reference file that cannot be read or written.
 pub fn run(cli: Cli) -> Result<(), DomainError> {
     // Seeding is part of running a root we chose; a root the user named is
     // theirs, and filling it with our files uninvited would be a surprise.
@@ -159,15 +175,10 @@ pub fn run(cli: Cli) -> Result<(), DomainError> {
         let root = bootstrap::test_data_root();
         bootstrap::ensure_data_root(&root, CuratedSeed::WithExamples)?;
         root
-    } else {
-        match cli.data_dir {
-            Some(dir) => dir,
-            None => {
-                let root = bootstrap::default_data_root();
-                bootstrap::ensure_data_root(&root, CuratedSeed::HeadersOnly)?;
-                root
-            }
-        }
+    } else if let Some(dir) = cli.data_dir { dir } else {
+        let root = bootstrap::default_data_root();
+        bootstrap::ensure_data_root(&root, CuratedSeed::HeadersOnly)?;
+        root
     };
 
     let Some(command) = cli.command else {

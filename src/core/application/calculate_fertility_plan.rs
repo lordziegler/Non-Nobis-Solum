@@ -1,3 +1,10 @@
+//! The balance half of a plan: what the crop needs, what the soil already
+//! supplies, and what is left to apply.
+//!
+//! Ends at kilograms of *nutrient*. Turning those into bags of a product is
+//! [`super::recommend_fertilizer_program`], which is a separate use case so
+//! a caller that only wants the balance never pays for the catalog scan.
+
 use super::scenario::FertilityScenario;
 use crate::core::domain::{
     efficiency, services, AnnualClimatology, DomainError, FertilityPlan, FertilizerDose, FieldContext, LimingDose,
@@ -40,7 +47,17 @@ pub struct CalculateFertilityPlan {
 }
 
 impl CalculateFertilityPlan {
+    /// # Arguments
+    /// One boxed repository per table the balance reads, in the order the
+    /// fields are declared. `agroclimatic` is the only optional one: `None`
+    /// plans offline, on the baseline mineralization factor.
+    ///
+    /// # Returns
+    /// The use case, ready to plan.
+    // Wide because the balance genuinely reads this many tables; a
+    // parameter struct would only move the same list one file over.
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         soil_tests: Box<dyn SoilTestRepository>,
         field_context: Box<dyn FieldContextRepository>,
@@ -145,7 +162,7 @@ impl CalculateFertilityPlan {
     /// Micronutrients, corrected against their critical level rather than
     /// balanced against a crop removal.
     ///
-    /// AGRONOMIC_NOTE: this is a different question from the one the
+    /// `AGRONOMIC_NOTE`: this is a different question from the one the
     /// macronutrient path answers, not a cheaper version of it. There is
     /// no removal coefficient for any micronutrient in the source tables,
     /// and a "replace what the harvest took" plan would be beside the
@@ -208,7 +225,7 @@ impl CalculateFertilityPlan {
             let (efficiency_min, efficiency_max) =
                 self.efficiency_rules
                     .get_efficiency_range(&field_context.texture, &field_context.irrigation_system, nutrient_id)?;
-            let efficiency_used = (efficiency_min + efficiency_max) / 2.0;
+            let efficiency_used = f64::midpoint(efficiency_min, efficiency_max);
             let net_requirement_kg_ha = services::net_requirement_kg_ha(deficit_kg_ha, 0.0, efficiency_used);
 
             let dose = if net_requirement_kg_ha > 0.0 {
@@ -419,6 +436,11 @@ fn highest_rated<'a, T>(rated: impl Iterator<Item = (&'a T, f64)>) -> Option<(&'
 }
 
 impl FertilityCalculatorPort for CalculateFertilityPlan {
+    // One linear pass: load, interpret, then one block per nutrient family.
+    // Cutting it at an arbitrary line count would split a pipeline whose
+    // steps are only meaningful in order, and hand each half a struct of
+    // borrowed intermediates to carry.
+    #[allow(clippy::too_many_lines)]
     fn calculate(&self, scenario: FertilityScenario) -> Result<FertilityPlan, DomainError> {
         let field_context = self.field_context.get_context_by_field_id(&scenario.field_id)?;
         let soil_tests = self.soil_tests.get_tests_by_sample_id(&scenario.sample_id)?;
@@ -489,7 +511,7 @@ impl FertilityCalculatorPort for CalculateFertilityPlan {
             // no product has been chosen yet — see `SulfurForm`.
             let efficiency = efficiency::adjust(
                 nutrient,
-                (efficiency_min + efficiency_max) / 2.0,
+                f64::midpoint(efficiency_min, efficiency_max),
                 efficiency_max,
                 &conditions,
                 SulfurForm::Unstated,

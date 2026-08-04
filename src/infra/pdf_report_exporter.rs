@@ -23,6 +23,11 @@ const MARGIN: f64 = 36.0;
 const FONT_SIZE: f64 = 8.0;
 const LEADING: f64 = 10.0;
 
+/// Writes a recommendation as a PDF, with no PDF library behind it.
+///
+/// The file is assembled by hand from the handful of primitives a text-only
+/// report needs, which is why nothing in `Cargo.toml` carries a PDF
+/// dependency.
 pub struct PdfReportExporter;
 
 impl ReportExporter for PdfReportExporter {
@@ -89,9 +94,9 @@ fn text_stream(lines: &[String]) -> Vec<u8> {
 
 /// PDF string escaping, plus the encoding step.
 ///
-/// The base-14 fonts are single-byte, so the text goes out as WinAnsi.
+/// The base-14 fonts are single-byte, so the text goes out as `WinAnsi`.
 /// Latin-1 passes through unchanged (which is what keeps `edáfico` and
-/// `agrícola` readable); the punctuation WinAnsi keeps in its C1 block sits
+/// `agrícola` readable); the punctuation `WinAnsi` keeps in its C1 block sits
 /// at a different code point from its Unicode one and is mapped here.
 /// Everything else — box drawing, arrows — becomes one ASCII character,
 /// never zero and never two: the report is column-aligned, and a

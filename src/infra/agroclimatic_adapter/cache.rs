@@ -33,6 +33,13 @@ pub struct CachedAgroclimaticRepo {
 }
 
 impl CachedAgroclimaticRepo {
+    /// # Arguments
+    /// * `inner` — the repository that actually fetches. Wrapped, not
+    ///   replaced: a miss still goes out to it.
+    ///
+    /// # Returns
+    /// A caching view over `inner`, with an empty cache.
+    #[must_use]
     pub fn new(inner: Box<dyn AgroclimaticRepository + Send + Sync>) -> Self {
         Self { inner, entries: Mutex::new(HashMap::new()) }
     }
@@ -54,6 +61,13 @@ pub struct PrewarmedAgroclimaticRepo {
 }
 
 impl PrewarmedAgroclimaticRepo {
+    /// # Arguments
+    /// * `cache` — the shared cache to read. Never fetched through, so
+    ///   constructing this can never block on a network.
+    ///
+    /// # Returns
+    /// A read-only view that answers from whatever the cache already holds.
+    #[must_use]
     pub fn new(cache: Arc<CachedAgroclimaticRepo>) -> Self {
         Self { cache }
     }

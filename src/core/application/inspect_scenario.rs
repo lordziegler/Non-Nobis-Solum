@@ -1,3 +1,10 @@
+//! Reading a lot without planning one.
+//!
+//! The interpretation half on its own: the readings classified against the
+//! critical levels, the qualitative soil-quality assessment, and where each
+//! number came from. Nothing here computes a dose, which is why a front-end
+//! can show a lot before anyone has asked for a recommendation.
+
 use super::scenario::FertilityScenario;
 use crate::core::domain::{
     services, CriticalLevel, DomainError, FieldContext, Nutrient, PropertyAssessment, RemovalReference,
@@ -17,18 +24,31 @@ const CMOLC_PER_KG: &str = "cmolc_per_kg";
 /// Where each number used in the plan comes from.
 #[derive(Debug, Clone)]
 pub struct NutrientProvenance {
+    /// The element these sources are for.
     pub nutrient: Nutrient,
+    /// The demand coefficients and the study behind them. `None` when the
+    /// table has no row for this crop and nutrient.
     pub removal_reference: Option<RemovalReference>,
+    /// The base `(min, max)` recovery fractions before site conditions.
+    /// `None` when the profile states no row for this nutrient.
     pub efficiency_range: Option<(f64, f64)>,
+    /// The thresholds the reading is classified against. `None` when no
+    /// row covers this nutrient and extraction method.
     pub critical_level: Option<CriticalLevel>,
 }
 
 /// The data behind a scenario, without computing doses.
 #[derive(Debug, Clone)]
 pub struct ScenarioInspection {
+    /// The lot as curated.
     pub field_context: FieldContext,
+    /// Every reading of the sample, as the lab reported it.
     pub soil_tests: Vec<SoilTest>,
+    /// The goal the inspection was read against — the override if one was
+    /// given, otherwise the curated row.
     pub yield_target: YieldTarget,
+    /// Which table each number would come from, so a reader can check the
+    /// science behind a figure before trusting the plan built on it.
     pub provenance: Vec<NutrientProvenance>,
     /// What the analysis *means*: pH class, organic matter against its
     /// thermal belt, salinity, CEC, the acidity diagnosis and the cation
@@ -36,6 +56,7 @@ pub struct ScenarioInspection {
     pub soil_quality: SoilQualityAssessment,
 }
 
+/// The read-only use case: interprets a lot without planning a dose.
 pub struct InspectScenario {
     soil_tests: Box<dyn SoilTestRepository>,
     field_context: Box<dyn FieldContextRepository>,
@@ -48,7 +69,16 @@ pub struct InspectScenario {
 }
 
 impl InspectScenario {
+    /// # Arguments
+    /// One boxed repository per reference or curated table the inspection
+    /// reads, in the order the fields are declared.
+    ///
+    /// # Returns
+    /// The use case, ready to inspect.
+    // Wide because the inspection genuinely reads this many tables; a
+    // parameter struct would only move the same list one file over.
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         soil_tests: Box<dyn SoilTestRepository>,
         field_context: Box<dyn FieldContextRepository>,
@@ -75,17 +105,15 @@ impl InspectScenario {
     /// whose table is missing comes back with `category: None` rather than
     /// failing: nothing here is required to plan.
     fn assess(&self, property: &str, zone: &str, value: f64, unit: &str) -> PropertyAssessment {
-        let band = self
-            .soil_quality
-            .bands(property, zone)
-            .ok()
-            .and_then(|bands| services::classify_band(&bands, value).cloned());
+        let bands = self.soil_quality.bands(property, zone).unwrap_or_default();
+        let band = services::classify_band(&bands, value).cloned();
         PropertyAssessment {
             property: property.to_string(),
             value,
             unit: unit.to_string(),
             category: band.as_ref().map(|b| b.category.clone()),
             source: band.map(|b| format!("{} ({})", b.source, b.year)),
+            bands,
         }
     }
 

@@ -28,6 +28,13 @@ pub struct DataLayout {
 }
 
 impl DataLayout {
+    /// # Arguments
+    /// * `data_root` — the catalog root every path is resolved under.
+    /// * `profile` — which reference profile's tables to read.
+    ///
+    /// # Returns
+    /// A layout that can name any file in the catalog. Touches no disk.
+    #[must_use]
     pub fn new(data_root: impl AsRef<Path>, profile: impl Into<String>) -> Self {
         Self { data_root: data_root.as_ref().to_path_buf(), profile: profile.into() }
     }
@@ -49,12 +56,16 @@ impl DataLayout {
 /// cases are rebuilt from [`App::layout`] on every action, because
 /// switching profile switches which reference files back them.
 pub struct App {
+    /// Root of the data catalog this session reads and writes.
     pub data_root: PathBuf,
+    /// The reference profile in force. Changing it changes which tables
+    /// every rebuilt use case reads.
     pub profile: String,
 }
 
 /// Default composition for the TUI: the same data root and `global`
 /// profile the CLI defaults to.
+#[must_use]
 pub fn build_app() -> App {
     App { data_root: default_data_root(), profile: "global".to_string() }
 }
@@ -66,6 +77,7 @@ pub fn build_app() -> App {
 /// root now, so a test calling it would read — and, on the write path,
 /// append to — somebody's actual records.
 #[cfg(test)]
+#[must_use]
 pub fn build_app_from_repo_data() -> App {
     App { data_root: PathBuf::from("data"), profile: "global".to_string() }
 }
@@ -100,6 +112,7 @@ pub enum CuratedSeed {
 
 /// A disposable catalog for `--test`, under the system temp directory
 /// because nothing in it may ever be mistaken for the user's records.
+#[must_use]
 pub fn test_data_root() -> PathBuf {
     std::env::temp_dir().join("non-nobis-solum-test")
 }
@@ -120,6 +133,12 @@ pub fn test_data_root() -> PathBuf {
 ///
 /// An edited copy is not deleted, though: whatever differs from the
 /// shipped file is moved aside to `<name>.bak` before the new one lands.
+///
+/// # Errors
+/// `DataSource` when a directory under `root` cannot be created, or a
+/// shipped file cannot be written, or an edited copy cannot be moved aside
+/// to its `.bak`. Seeding is idempotent: a second call over a seeded root
+/// is not an error.
 pub fn ensure_data_root(root: &Path, curated: CuratedSeed) -> Result<(), DomainError> {
     let write = |path: &Path, contents: &str| -> Result<(), DomainError> {
         if let Some(parent) = path.parent() {
@@ -231,20 +250,27 @@ fn reconcile_header(path: &Path, shipped_header: &str) -> Result<(), DomainError
 }
 
 impl App {
+    /// The path layout for the profile currently in force.
+    #[must_use]
     pub fn layout(&self) -> DataLayout {
         DataLayout::new(&self.data_root, &self.profile)
     }
 
+    /// Where this profile's reference tables live. Read-only to the app.
+    #[must_use]
     pub fn reference_dir(&self) -> PathBuf {
         self.data_root.join("reference").join(&self.profile)
     }
 
+    /// Where the user's own records live. The only directory written to.
+    #[must_use]
     pub fn curated_dir(&self) -> PathBuf {
         self.data_root.join("curated")
     }
 
     /// Reference profiles available on disk, so the front-end never has to
     /// hardcode `global`/`andina_colombia`.
+    #[must_use]
     pub fn profiles(&self) -> Vec<String> {
         let mut found: Vec<String> = std::fs::read_dir(self.data_root.join("reference"))
             .into_iter()
@@ -263,18 +289,26 @@ impl App {
 ///
 /// `None` rather than an error if the HTTP client can't be built — at this
 /// layer that is the API being down, and neither may stop a plan.
+#[must_use]
 pub fn build_agroclimatic_repo() -> Option<Box<dyn AgroclimaticRepository>> {
     Some(Box::new(NasaPowerRepo::new().ok()?))
 }
 
 /// The same provider as a cache a front-end can share with a background
 /// thread, read through [`crate::infra::PrewarmedAgroclimaticRepo`].
+#[must_use]
 pub fn build_climate_cache() -> Option<Arc<CachedAgroclimaticRepo>> {
     Some(Arc::new(CachedAgroclimaticRepo::new(Box::new(NasaPowerRepo::new().ok()?))))
 }
 
 /// `agroclimatic` is `None` for an offline plan (`--no-climate`, or any
 /// front-end that shouldn't block on a network call).
+///
+/// # Errors
+/// `DataSource` when a reference table the use case needs at construction —
+/// the efficiency rules, the efficiency bands, the liming rules, the
+/// conversion factors — cannot be read or does not parse. The curated files
+/// are opened per call, not here, so a missing lot surfaces at `calculate`.
 pub fn build_calculate_fertility_plan(
     layout: &DataLayout,
     agroclimatic: Option<Box<dyn AgroclimaticRepository>>,
@@ -298,6 +332,9 @@ pub fn build_calculate_fertility_plan(
 /// The product half of a plan. Two repositories only: the catalog to pick
 /// from, and the conversion table that moves elemental P and K onto the
 /// commercial P2O5/K2O basis the grades are stated in.
+///
+/// # Errors
+/// `DataSource` when the conversion table cannot be read or does not parse.
 pub fn build_recommend_fertilizer_program(layout: &DataLayout) -> Result<RecommendFertilizerProgram, DomainError> {
     Ok(RecommendFertilizerProgram::new(
         Box::new(CsvFertilizerSourcesRepo::new(layout.reference("fertilizer_sources.csv"))),
@@ -307,6 +344,7 @@ pub fn build_recommend_fertilizer_program(layout: &DataLayout) -> Result<Recomme
 
 /// The source catalog on its own, for callers that only want to report on
 /// it rather than plan with it.
+#[must_use]
 pub fn build_fertilizer_sources(layout: &DataLayout) -> CsvFertilizerSourcesRepo {
     CsvFertilizerSourcesRepo::new(layout.reference("fertilizer_sources.csv"))
 }
@@ -314,18 +352,21 @@ pub fn build_fertilizer_sources(layout: &DataLayout) -> CsvFertilizerSourcesRepo
 /// The curated lots on their own, for a front-end that needs a whole
 /// [`crate::core::domain::FieldContext`] rather than the summary
 /// `ListLots` gives — prefilling an edit form is the case.
+#[must_use]
 pub fn build_field_contexts(layout: &DataLayout) -> CsvFieldContextRepo {
     CsvFieldContextRepo::new(layout.curated("field_context.csv"))
 }
 
 /// The curated readings on their own, for a front-end that wants to show
 /// what a lot already carries — prefilling the lab panel is the case.
+#[must_use]
 pub fn build_soil_tests(layout: &DataLayout) -> CsvSoilTestsRepo {
     CsvSoilTestsRepo::new(layout.curated("soil_tests.csv"))
 }
 
 /// Reads the curated lots, not the planning rows: a lot exists whether or
 /// not a crop is planned on it.
+#[must_use]
 pub fn build_list_lots(layout: &DataLayout) -> ListLots {
     ListLots::new(
         Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),
@@ -335,6 +376,7 @@ pub fn build_list_lots(layout: &DataLayout) -> ListLots {
 
 /// The only use case wired to a writer. Curated data is
 /// profile-independent, so the files are the same under any profile.
+#[must_use]
 pub fn build_register_lot(layout: &DataLayout) -> RegisterLot {
     RegisterLot::new(
         Box::new(CsvFieldContextRepo::new(layout.curated("field_context.csv"))),
@@ -346,10 +388,19 @@ pub fn build_register_lot(layout: &DataLayout) -> RegisterLot {
     )
 }
 
+/// Wires the crop-listing use case. Infallible: the catalog is opened at
+/// query time, not here.
+#[must_use]
 pub fn build_list_supported_crops(layout: &DataLayout) -> ListSupportedCrops {
     ListSupportedCrops::new(Box::new(CsvCropCatalogRepo::new(layout.shared_reference("crops.csv"))))
 }
 
+/// Reads a scenario without planning one: the interpretation half on its
+/// own, for a front-end that shows a lot before anyone asks for a dose.
+///
+/// # Errors
+/// `DataSource` when a reference table needed at construction cannot be
+/// read or does not parse.
 pub fn build_inspect_scenario(layout: &DataLayout) -> Result<InspectScenario, DomainError> {
     Ok(InspectScenario::new(
         Box::new(CsvSoilTestsRepo::new(layout.curated("soil_tests.csv"))),

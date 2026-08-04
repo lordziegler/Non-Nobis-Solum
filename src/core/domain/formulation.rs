@@ -38,7 +38,7 @@ use super::nutrient::Nutrient;
 ///   for space in a grade with N, P2O5 and K2O.
 /// - In [`crate::core::domain::LimingMaterial`], `cao_pct`/`mgo_pct` is
 ///   *neutralizing value* — how much acidity a material corrects. A
-///   material is chosen on PRNT, dosed in t/ha of CaCO3 equivalent, and
+///   material is chosen on PRNT, dosed in t/ha of `CaCO3` equivalent, and
 ///   never enters this catalog.
 ///
 /// A liming material must not be pushed into `fertilizer_sources.csv` to
@@ -47,11 +47,19 @@ use super::nutrient::Nutrient;
 /// already prints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum GradeNutrient {
+    /// Nitrogen. Stated elementally on a bag, unlike P and K.
     N,
+    /// Phosphorus as the pentoxide — the basis a grade's second number is
+    /// printed in, not elemental P.
     P2O5,
+    /// Potassium as the oxide — the grade's third number, not elemental K.
     K2O,
+    /// Sulfur. Enters the grade only once a requirement asks for it.
     S,
+    /// Calcium as the oxide, carried as a *nutrient* by a fertilizer. Not
+    /// a liming material's neutralizing capacity — see the note above.
     CaO,
+    /// Magnesium as the oxide, on the same footing as `CaO`.
     MgO,
 }
 
@@ -68,7 +76,7 @@ impl GradeNutrient {
 
     /// The nutrients the *target commercial grade* is built from.
     ///
-    /// AGRONOMIC_NOTE: narrower than [`Self::ALL`] on purpose. A compound
+    /// `AGRONOMIC_NOTE`: narrower than [`Self::ALL`] on purpose. A compound
     /// product is specified, ordered and priced as N-P2O5-K2O(-S); no
     /// manufacturer sells against a six-term ratio, so folding Ca and Mg
     /// into the target grade would produce a specification nothing in any
@@ -81,6 +89,7 @@ impl GradeNutrient {
 
     /// The element the catalog stores this as, and the unit conversion the
     /// use case must apply to move between the two.
+    #[must_use]
     pub fn elemental(self) -> Nutrient {
         match self {
             GradeNutrient::N => Nutrient::N,
@@ -95,6 +104,7 @@ impl GradeNutrient {
     /// `None` where the elemental and visible forms are the same substance
     /// — N and S need no conversion, P and K do. The strings are the keys
     /// `ConversionFactorsRepository` answers to.
+    #[must_use]
     pub fn oxide_conversion(self) -> Option<(&'static str, &'static str)> {
         match self {
             GradeNutrient::P2O5 => Some(("P", "P2O5")),
@@ -105,6 +115,11 @@ impl GradeNutrient {
         }
     }
 
+    /// The nutrient's name on the basis a bag prints it.
+    ///
+    /// # Returns
+    /// A static identifier — `"P2O5"`, never `"P"`.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             GradeNutrient::N => "N",
@@ -142,17 +157,36 @@ pub struct CommercialGrade {
 }
 
 impl CommercialGrade {
+    /// The four-term grade a bag normally prints.
+    ///
+    /// # Arguments
+    /// * `n`, `p2o5`, `k2o`, `s` — percent by mass, on the visible basis.
+    ///
+    /// # Returns
+    /// The grade, with `CaO` and `MgO` at zero. Use [`Self::with_bases`]
+    /// for a product that carries those as nutrients.
+    #[must_use]
     pub fn new(n: f64, p2o5: f64, k2o: f64, s: f64) -> Self {
         Self { values: [n, p2o5, k2o, s, 0.0, 0.0] }
     }
 
     /// The full six-term grade, for a source that supplies Ca or Mg as a
     /// nutrient. See the note on [`GradeNutrient`] for why that is not the
-    /// same thing as a liming material's CaO.
+    /// same thing as a liming material's `CaO`.
+    #[must_use]
     pub fn with_bases(n: f64, p2o5: f64, k2o: f64, s: f64, cao: f64, mgo: f64) -> Self {
         Self { values: [n, p2o5, k2o, s, cao, mgo] }
     }
 
+    /// Builds a grade from whichever terms are known.
+    ///
+    /// # Arguments
+    /// * `pairs` — `(nutrient, percent)` in any order. Anything not named
+    ///   stays at zero.
+    ///
+    /// # Returns
+    /// The assembled grade.
+    #[must_use]
     pub fn from_pairs(pairs: impl IntoIterator<Item = (GradeNutrient, f64)>) -> Self {
         let mut grade = Self::default();
         for (nutrient, value) in pairs {
@@ -161,26 +195,37 @@ impl CommercialGrade {
         grade
     }
 
+    /// One term of the grade, as a percent by mass. Zero for a nutrient
+    /// the product does not carry.
+    #[must_use]
     pub fn get(&self, nutrient: GradeNutrient) -> f64 {
         self.values[nutrient.index()]
     }
 
+    /// Overwrites one term of the grade, in percent by mass.
     pub fn set(&mut self, nutrient: GradeNutrient, value: f64) {
         self.values[nutrient.index()] = value;
     }
 
     /// Total nutrient content, the figure that decides whether a grade is
     /// physically possible at all (nothing can exceed 100%).
+    #[must_use]
     pub fn sum(&self) -> f64 {
         self.values.iter().sum()
     }
 
+    /// Every nutrient this grade actually carries.
+    ///
+    /// # Returns
+    /// The terms above zero, in [`GradeNutrient::ALL`] order.
+    #[must_use]
     pub fn carried(&self) -> Vec<GradeNutrient> {
         GradeNutrient::ALL.into_iter().filter(|n| self.get(*n) > 0.0).collect()
     }
 
     /// `13-26-6` / `13-26-6-3S`. The S term is only printed when present,
     /// which is how a bag prints it.
+    #[must_use]
     pub fn label(&self) -> String {
         let head = format!(
             "{}-{}-{}",
@@ -202,6 +247,7 @@ impl CommercialGrade {
 
     /// The comparison coefficients of PART C: N/P, P/K and — only when
     /// sulfur is in play — K/S.
+    #[must_use]
     pub fn coefficients(&self) -> RatioCoefficients {
         let ratio = |a: GradeNutrient, b: GradeNutrient| {
             let (a, b) = (self.get(a), self.get(b));
@@ -233,9 +279,9 @@ impl CommercialGrade {
 
 fn round_label(value: f64) -> String {
     if (value - value.round()).abs() < 0.05 {
-        format!("{:.0}", value)
+        format!("{value:.0}")
     } else {
-        format!("{:.1}", value)
+        format!("{value:.1}")
     }
 }
 
@@ -244,8 +290,13 @@ fn round_label(value: f64) -> String {
 /// make sulfur-free products look wrong against a sulfur-free target.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RatioCoefficients {
+    /// N divided by P2O5. `None` when the grade carries no phosphorus.
     pub n_over_p: Option<f64>,
+    /// P2O5 divided by K2O. `None` when the grade carries no potassium.
     pub p_over_k: Option<f64>,
+    /// K2O divided by S. `None` for a sulfur-free grade — inventing one
+    /// would make sulfur-free products score badly against a sulfur-free
+    /// target.
     pub k_over_s: Option<f64>,
 }
 
@@ -259,6 +310,7 @@ impl RatioCoefficients {
     /// shapes, so the ratio term abstains and the grade distance and the
     /// coverage term decide. Documented rather than hidden because it is
     /// the one input to the score that can be vacuously perfect.
+    #[must_use]
     pub fn distance_to(&self, other: &Self) -> f64 {
         let pairs = [
             (self.n_over_p, other.n_over_p),
@@ -286,7 +338,10 @@ impl RatioCoefficients {
 /// One nutrient's net requirement on the visible basis, in kg/ha.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NutrientRequirement {
+    /// Which nutrient, on the visible commercial basis.
     pub nutrient: GradeNutrient,
+    /// How much of it is still to apply, per hectare. Always positive —
+    /// a covered nutrient is absent from the list, not a zero in it.
     pub kg_ha: f64,
 }
 
@@ -298,6 +353,7 @@ pub struct NutrientRequirement {
 /// requirement that rounds away takes its nutrient out of the target ratio
 /// entirely, which is a different plan, not a rounder one. So the floor for
 /// any positive requirement is one step, 10.
+#[must_use]
 pub fn round_to_nearest_ten(kg_ha: f64) -> f64 {
     if kg_ha <= 0.0 {
         return 0.0;
@@ -315,22 +371,39 @@ pub struct GradeScalingStep {
     pub continuous: CommercialGrade,
     /// What a bag would actually print.
     pub discretized: CommercialGrade,
+    /// How far rounding to whole numbers moved this rung off the exact
+    /// ratio. The primary cost.
     pub rounding_distortion: f64,
+    /// Charged as the terms approach a physically impossible total — no
+    /// bag can exceed 100% nutrient.
     pub sum_penalty: f64,
+    /// Charged for terms that are implausibly small or large for a real
+    /// product, independent of their ratio.
     pub magnitude_penalty: f64,
+    /// How far this rung sits from the nearest grade the catalog actually
+    /// sells.
     pub catalog_distance: f64,
+    /// The combined penalty that decides against a rung the trade would
+    /// never print.
     pub plausibility_penalty: f64,
+    /// Whether this rung is the one the ladder settled on.
     pub chosen: bool,
 }
 
 /// The whole PART A + PART B derivation, start to finish.
 #[derive(Debug, Clone)]
 pub struct RatioConstruction {
+    /// The requirements as the balance handed them over.
     pub original: Vec<NutrientRequirement>,
+    /// The same requirements after PART A's rounding to the nearest ten.
     pub rounded: Vec<NutrientRequirement>,
+    /// The smallest positive rounded requirement — the divisor the ratio
+    /// is normalized on.
     pub smallest_rounded: f64,
     /// The normalized ratio, e.g. 4:5:1.
     pub normalized: CommercialGrade,
+    /// Every rung of the ladder, kept so a report can show the search and
+    /// not only its answer.
     pub steps: Vec<GradeScalingStep>,
     /// The grade every candidate is then scored against.
     pub target: CommercialGrade,
@@ -338,9 +411,9 @@ pub struct RatioConstruction {
 
 /// Total nutrient content bounds a bagged compound plausibly carries.
 ///
-/// AGRONOMIC_NOTE: below 20% the product is mostly filler and is sold as an
+/// `AGRONOMIC_NOTE`: below 20% the product is mostly filler and is sold as an
 /// amendment rather than as a grade; above 65% no granulated NPK exists —
-/// the densest common straights (urea 46, KCl 60) are single-nutrient, and
+/// the densest common straights (urea 46, `KCl` 60) are single-nutrient, and
 /// a compound has to carry its own binder and coating. 100% is the
 /// physical wall: a grade summing above it cannot be manufactured at all.
 const MIN_PLAUSIBLE_GRADE_SUM: f64 = 20.0;
@@ -489,8 +562,13 @@ fn evaluate_step(
 /// visible basis, plus whatever the catalog says about sourcing it.
 #[derive(Debug, Clone)]
 pub struct CompositeCandidate {
+    /// Catalog key, and the tiebreaker that keeps ranking deterministic
+    /// whatever order the catalog loaded in.
     pub source_id: String,
+    /// The product's commercial name.
     pub name: String,
+    /// Its composition on the visible basis, already converted from the
+    /// elemental figures the catalog may store.
     pub grade: CommercialGrade,
     /// Read off the catalog's `form` column, never inferred from the name.
     pub form: FertilizerForm,
@@ -507,6 +585,7 @@ impl CompositeCandidate {
     /// (Mg + S) are straights that happen to carry a secondary nutrient,
     /// and calling them compounds would empty the simple-blend strategy of
     /// most of its catalog.
+    #[must_use]
     pub fn is_compound(&self) -> bool {
         [GradeNutrient::N, GradeNutrient::P2O5, GradeNutrient::K2O]
             .iter()
@@ -525,6 +604,7 @@ impl CompositeCandidate {
 /// 0.0, because absent metadata is not evidence of a problem. Keyword
 /// matching is accent- and case-insensitive on the stem, so
 /// "comercializacion" and "comercialización" both hit.
+#[must_use]
 pub fn commercialization_penalty(restrictions: &[String]) -> f64 {
     let text = restrictions.join(" ").to_lowercase().replace(['á', 'é', 'í', 'ó', 'ú'], "?");
     // Ordered worst-first: a product that is both regional and restricted
@@ -554,11 +634,18 @@ const GRADE_WEIGHT: f64 = 0.5;
 const COVERAGE_WEIGHT: f64 = 2.0;
 const COMMERCIALIZATION_WEIGHT: f64 = 0.5;
 
+/// One compound candidate's scorecard against the target grade. Lower
+/// `total_score` is better; every component is kept so the report can show
+/// why a product won rather than only that it did.
 #[derive(Debug, Clone)]
 pub struct CompositeCandidateScore {
+    /// Catalog key of the product scored.
     pub candidate_id: String,
+    /// Its commercial name.
     pub candidate_name: String,
+    /// Its grade on the visible basis.
     pub candidate_grade: CommercialGrade,
+    /// Its own N/P, P/K and K/S, for comparison against the target's.
     pub coefficients: RatioCoefficients,
     /// Distance between the candidate's N/P, P/K, K/S and the target's.
     pub ratio_distance: f64,
@@ -568,12 +655,18 @@ pub struct CompositeCandidateScore {
     pub grade_distance: f64,
     /// Share of the required nutrients this product carries at all, 0-1.
     pub nutrient_coverage_score: f64,
+    /// How hard the catalog says this product is to buy, 0.0-1.0.
     pub commercialization_penalty: f64,
+    /// The weighted sum of the components above. Lower is better; coverage
+    /// dominates, because a product that misses a nutrient outright is a
+    /// worse answer than one whose proportions are merely off.
     pub total_score: f64,
+    /// The score in words — the audit trail the heuristic owes a reader.
     pub explanation: String,
 }
 
 /// Scores one compound candidate against the target grade. Lower is better.
+#[must_use]
 pub fn score_candidate(
     target: &CommercialGrade,
     required: &[GradeNutrient],
@@ -632,6 +725,7 @@ pub fn score_candidate(
 /// Every compound candidate, best first. Ties break on `source_id` so the
 /// same catalog always produces the same ranking, whatever order it loaded
 /// in.
+#[must_use]
 pub fn rank_candidates(
     target: &CommercialGrade,
     required: &[GradeNutrient],
@@ -651,6 +745,7 @@ pub fn rank_candidates(
 // PARTS E, F, G — dosing, remainders and the blend
 // ---------------------------------------------------------------------
 
+/// How a program is allowed to cover the requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FertilizationStrategy {
     /// One compound product carries the bulk, straights close the gap.
@@ -661,9 +756,14 @@ pub enum FertilizationStrategy {
 }
 
 impl FertilizationStrategy {
+    /// Both strategies, so a front-end can offer the choice and the report
+    /// can compute the one that was not chosen as an alternative.
     pub const ALL: [FertilizationStrategy; 2] =
         [FertilizationStrategy::CompositePlusSimple, FertilizationStrategy::SimpleBlendOnly];
 
+    /// The strategy's stored spelling — what a settings file carries and
+    /// what `from_str` accepts.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             FertilizationStrategy::CompositePlusSimple => "composite_plus_simple",
@@ -671,6 +771,12 @@ impl FertilizationStrategy {
         }
     }
 
+    /// The strategy this one is not.
+    ///
+    /// # Returns
+    /// The opposite strategy — with two of them, this is the whole toggle,
+    /// and it is how the report computes its comparable alternative.
+    #[must_use]
     pub fn other(self) -> Self {
         match self {
             FertilizationStrategy::CompositePlusSimple => FertilizationStrategy::SimpleBlendOnly,
@@ -697,13 +803,22 @@ impl std::fmt::Display for FertilizationStrategy {
     }
 }
 
+/// What part a product plays in a program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceRole {
+    /// The compound carrying the bulk of the requirement.
     Composite,
+    /// A straight closing a gap the compound left.
     Simple,
 }
 
 impl SourceRole {
+    /// The role's name as a report prints it.
+    ///
+    /// # Returns
+    /// `"compound"` or `"straight"` — the words a grower uses, not the
+    /// variant names.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             SourceRole::Composite => "compound",
@@ -712,16 +827,26 @@ impl SourceRole {
     }
 }
 
+/// How much of one nutrient a single product line supplies.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NutrientContribution {
+    /// Which nutrient, on the visible basis.
     pub nutrient: GradeNutrient,
+    /// Kilograms of it per hectare, from this line alone.
     pub kg_ha: f64,
 }
 
+/// One nutrient's balance across the whole program: asked for, supplied,
+/// and whatever is still short.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NutrientRemainder {
+    /// Which nutrient, on the visible basis.
     pub nutrient: GradeNutrient,
+    /// What the balance asked for, per hectare.
     pub required_kg_ha: f64,
+    /// What every line of the program supplies between them, per hectare.
+    /// May exceed `required_kg_ha`: covering one nutrient exactly often
+    /// over-supplies another.
     pub supplied_kg_ha: f64,
     /// `max(0, required - supplied)`: an over-application is reported by
     /// `coverage_pct`, never as a negative remainder.
@@ -729,6 +854,13 @@ pub struct NutrientRemainder {
 }
 
 impl NutrientRemainder {
+    /// How much of the requirement this program covers.
+    ///
+    /// # Returns
+    /// A percentage, which may exceed 100 — over-application is reported
+    /// here rather than hidden as a clamped remainder. A nutrient nothing
+    /// was required of is 100%.
+    #[must_use]
     pub fn coverage_pct(&self) -> f64 {
         if self.required_kg_ha <= 0.0 {
             return 100.0;
@@ -740,14 +872,28 @@ impl NutrientRemainder {
 /// Bags of product, for a grower who buys by the bag and not by the kg.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BagBreakdown {
+    /// What one bag weighs, as the local trade sells it.
     pub bag_weight_kg: f64,
+    /// Bags per hectare, unrounded.
     pub bags_per_ha: f64,
+    /// Bags for the whole planted area, unrounded.
     pub bags_total: f64,
     /// What to actually order — bags are not sold in fractions.
     pub bags_total_rounded_up: u64,
 }
 
 impl BagBreakdown {
+    /// Converts a mass dose into bags.
+    ///
+    /// # Arguments
+    /// * `kg_per_ha` — the per-hectare dose.
+    /// * `kg_total` — the dose for the whole planted area.
+    /// * `bag_weight_kg` — what one bag weighs.
+    ///
+    /// # Returns
+    /// `None` for a non-positive bag weight, which would otherwise divide
+    /// to infinity. The caller treats that as "report kilograms only".
+    #[must_use]
     pub fn new(kg_per_ha: f64, kg_total: f64, bag_weight_kg: f64) -> Option<Self> {
         (bag_weight_kg > 0.0).then(|| Self {
             bag_weight_kg,
@@ -761,14 +907,26 @@ impl BagBreakdown {
 /// One product line of the final recommendation.
 #[derive(Debug, Clone)]
 pub struct BlendLine {
+    /// Catalog key of the product on this line.
     pub source_id: String,
+    /// Its commercial name.
     pub source_name: String,
+    /// Whether it is the compound or a straight closing a gap.
     pub role: SourceRole,
+    /// Its composition, on the visible basis.
     pub grade: CommercialGrade,
+    /// The chemical form it carries its nutrient in — what makes an
+    /// elemental sulfur line worth flagging after the fact.
     pub form: FertilizerForm,
+    /// Kilograms of product per hectare.
     pub kg_per_ha: f64,
+    /// Kilograms of product for the whole planted area.
     pub kg_total: f64,
+    /// The same dose in bags. `None` when no usable bag weight was given.
     pub bags: Option<BagBreakdown>,
+    /// What this line supplies of each nutrient — one entry per nutrient
+    /// it carries, which is why a two-nutrient product is one line and not
+    /// two.
     pub contributions: Vec<NutrientContribution>,
     /// Why this product, in one line — the audit trail the heuristic owes
     /// the reader.
@@ -778,19 +936,32 @@ pub struct BlendLine {
 /// One compound product and the mass of it this program applies.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompoundPart {
+    /// Catalog key of this part's product.
     pub source_id: String,
+    /// Its commercial name.
     pub source_name: String,
+    /// Its grade on the visible basis.
     pub grade: CommercialGrade,
     /// The nutrient whose 100% coverage sized this part.
     pub reference_nutrient: GradeNutrient,
     /// This part's share of the compound slot: 1.0 for a single product,
     /// two complementary fractions for a pair.
     pub share: f64,
+    /// Kilograms of this part per hectare.
     pub kg_per_ha: f64,
+    /// Why this product, in one line.
     pub rationale: String,
 }
 
 impl CompoundPart {
+    /// The catalog row this part was built from.
+    ///
+    /// # Panics
+    /// Never in practice: a `CompoundPart` is only ever constructed from a
+    /// row of the same catalog it is later looked up in, so the id is
+    /// present by construction. The `expect` documents that invariant
+    /// rather than guarding an input — a miss would mean the caller mixed
+    /// two catalogs, which is a bug here, not a condition to recover from.
     fn candidate<'a>(&self, catalog: &'a [CompositeCandidate]) -> &'a CompositeCandidate {
         catalog.iter().find(|c| c.source_id == self.source_id).expect("the part came from this catalog")
     }
@@ -800,6 +971,7 @@ impl CompoundPart {
 /// that was chosen.
 #[derive(Debug, Clone)]
 pub struct CompositeRecommendation {
+    /// The scorecard of the leading product.
     pub score: CompositeCandidateScore,
     /// One entry for a single compound, two when the search found a pair
     /// that covers more of the plan than either alone.
@@ -808,9 +980,12 @@ pub struct CompositeRecommendation {
     /// requirement on its own. The spread between them is the reason a
     /// single compound cannot balance a plan by itself.
     pub dose_per_nutrient: Vec<(GradeNutrient, f64)>,
+    /// The nutrient whose 100% coverage sized the dose — the binding one,
+    /// so no requirement is over-shot by the compound alone.
     pub reference_nutrient: GradeNutrient,
     /// Total across every part.
     pub kg_per_ha: f64,
+    /// What the compound slot supplies of each nutrient between its parts.
     pub contributions: Vec<NutrientContribution>,
     /// Why a pair beat the best single compound, when it did.
     pub pairing: String,
@@ -819,7 +994,7 @@ pub struct CompositeRecommendation {
 /// How many ranked compounds enter the pairing search, and how coarsely the
 /// slot is partitioned between two of them.
 ///
-/// AGRONOMIC_NOTE: the compound slot is where splitting actually pays,
+/// `AGRONOMIC_NOTE`: the compound slot is where splitting actually pays,
 /// because a compound is dosed on the *minimum* over its nutrients — a
 /// non-linear function, so two grades can cover more of a plan together
 /// than either does alone. Splitting a *straight* between two products
@@ -1039,6 +1214,7 @@ fn program_score(parts: &[CompoundPart], straights: &[BlendLine], required: &[Nu
 ///
 /// ponytail: one rule, no knob. If a grower deliberately wants to build
 /// soil P, flipping `min` to `max` here is the whole change.
+#[must_use]
 pub fn compound_dose_kg_ha(grade: &CommercialGrade, requirements: &[NutrientRequirement]) -> Option<CompoundDose> {
     let per_nutrient: Vec<(GradeNutrient, f64)> = requirements
         .iter()
@@ -1059,13 +1235,17 @@ pub fn compound_dose_kg_ha(grade: &CommercialGrade, requirements: &[NutrientRequ
 /// The dose, and the whole table it was chosen from.
 #[derive(Debug, Clone)]
 pub struct CompoundDose {
+    /// The requirement that sized the dose: the one demanding the most
+    /// product, so nothing else is over-shot.
     pub reference_nutrient: GradeNutrient,
+    /// The dose that follows from it, per hectare.
     pub kg_per_ha: f64,
     /// What each requirement alone would demand of this product.
     pub per_nutrient: Vec<(GradeNutrient, f64)>,
 }
 
 /// What `kg_per_ha` of a product delivers, on the visible basis.
+#[must_use]
 pub fn contributions_of(grade: &CommercialGrade, kg_per_ha: f64) -> Vec<NutrientContribution> {
     grade
         .carried()
@@ -1096,7 +1276,7 @@ fn straight_shortlist_penalty(candidate: &CompositeCandidate, wanted: GradeNutri
 /// win against a freely stocked one, a "uso especializado" one 30%, a
 /// regulated one 50%.
 ///
-/// AGRONOMIC_NOTE: the number that made this necessary was phosphoric acid
+/// `AGRONOMIC_NOTE`: the number that made this necessary was phosphoric acid
 /// — 52% P2O5, a fertigation liquid — beating triple superphosphate at 46%
 /// for a broadcast plan, because it is 12% lighter per unit of P2O5.
 /// Concentration and mass alone keep picking specialty liquids for growers
@@ -1145,7 +1325,7 @@ fn straight_shortlist(catalog: &[CompositeCandidate], wanted: GradeNutrient) -> 
 ///    pick time; it is now measured on the finished blend, where it is
 ///    actually true.
 /// 3. **sourced mass** — freight and bags, with each product's mass
-///    surcharged by how hard it is to buy (see [`sourcing_surcharge`]).
+///    surcharged by how hard it is to buy (see `sourcing_surcharge`).
 /// 4. **product count** — a blend with fewer bags is one fewer purchase and
 ///    one fewer pass over the field.
 ///
@@ -1164,6 +1344,8 @@ pub struct BlendScore {
     /// Not the mass anyone weighs — that is on the blend lines. This is the
     /// comparison quantity: real mass surcharged by sourcing difficulty.
     pub sourced_mass_kg: f64,
+    /// How many distinct products the blend needs. The last tiebreak: a
+    /// grower has to source and handle each one.
     pub product_count: usize,
 }
 
@@ -1305,8 +1487,12 @@ pub enum BlendSearchStrategy {
 }
 
 impl BlendSearchStrategy {
+    /// Both strategies, so a front-end can offer the choice.
     pub const ALL: [BlendSearchStrategy; 2] = [BlendSearchStrategy::SplitPairs, BlendSearchStrategy::SinglePick];
 
+    /// The strategy's stored spelling — what a settings file carries and
+    /// what `from_str` accepts.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             BlendSearchStrategy::SinglePick => "single_pick",
@@ -1336,8 +1522,11 @@ impl std::fmt::Display for BlendSearchStrategy {
 /// One product's share of one nutrient's requirement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlendPartition {
+    /// The requirement being covered.
     pub nutrient: GradeNutrient,
+    /// Catalog key of the product covering this share of it.
     pub source_id: String,
+    /// Its commercial name.
     pub source_name: String,
     /// 1.0 for a single pick; the two halves of a split sum to 1.0.
     pub share: f64,
@@ -1346,8 +1535,13 @@ pub struct BlendPartition {
 /// A blend the search evaluated, and what it scored.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlendCandidate {
+    /// Which search produced this candidate.
     pub strategy: BlendSearchStrategy,
+    /// Who covers what: one entry per nutrient for a single pick, two for
+    /// each split.
     pub partitions: Vec<BlendPartition>,
+    /// What it scored. Compared lexicographically — uncovered first, then
+    /// over-supply, then sourced mass, then product count.
     pub score: BlendScore,
     /// Why this beat the baseline, in one sentence. Empty when it *is* the
     /// baseline.
@@ -1356,6 +1550,7 @@ pub struct BlendCandidate {
 
 impl BlendCandidate {
     /// The splits only, for a report that wants to explain them.
+    #[must_use]
     pub fn splits(&self) -> Vec<(GradeNutrient, Vec<&BlendPartition>)> {
         GradeNutrient::ALL
             .into_iter()
@@ -1538,24 +1733,21 @@ fn try_splits<'a>(
         }
     }
 
-    match winner {
-        Some((trial, improved)) => {
-            let explanation = format!(
-                "{} was split {:.0}/{:.0} between {} and {}.",
-                nutrient.as_str(),
-                trial[0].1 * 100.0,
-                trial[1].1 * 100.0,
-                trial[0].0.name,
-                trial[1].0.name,
-            );
-            assignment[index].1 = trial;
-            *score = improved;
-            Some(explanation)
-        }
-        None => {
-            assignment[index].1 = original;
-            None
-        }
+    if let Some((trial, improved)) = winner {
+        let explanation = format!(
+            "{} was split {:.0}/{:.0} between {} and {}.",
+            nutrient.as_str(),
+            trial[0].1 * 100.0,
+            trial[1].1 * 100.0,
+            trial[0].0.name,
+            trial[1].0.name,
+        );
+        assignment[index].1 = trial;
+        *score = improved;
+        Some(explanation)
+    } else {
+        assignment[index].1 = original;
+        None
     }
 }
 
@@ -1610,7 +1802,7 @@ fn cover_with_straights(
                 .carried()
                 .into_iter()
                 .filter(|nutrient| nutrients.contains(nutrient))
-                .map(|nutrient| nutrient.as_str())
+                .map(GradeNutrient::as_str)
                 .collect();
             let share = candidate
                 .partitions
@@ -1641,6 +1833,7 @@ fn cover_with_straights(
 /// One strategy's complete answer.
 #[derive(Debug, Clone)]
 pub struct FertilizerProgram {
+    /// Which strategy produced this program.
     pub strategy: FertilizationStrategy,
     /// How the straights were searched, and what the search chose. `None`
     /// when no straight was needed at all.
@@ -1648,15 +1841,24 @@ pub struct FertilizerProgram {
     /// `None` for [`FertilizationStrategy::SimpleBlendOnly`], and for a
     /// catalog with no usable compound.
     pub composite: Option<CompositeRecommendation>,
+    /// Every product to buy, compound first, then the straights.
     pub lines: Vec<BlendLine>,
+    /// One entry per nutrient: asked for, supplied, still short. A
+    /// requirement no product carries is reported here rather than
+    /// dropped.
     pub balance: Vec<NutrientRemainder>,
+    /// Kilograms of product per hectare across every line.
     pub total_kg_per_ha: f64,
+    /// Kilograms of product for the whole planted area.
     pub total_kg: f64,
+    /// Bags to actually order, summed after rounding each line up — bags
+    /// are not sold in fractions, so this is not the rounded total.
     pub total_bags_rounded_up: u64,
 }
 
 impl FertilizerProgram {
     /// Nutrients still short after every line, if any.
+    #[must_use]
     pub fn uncovered(&self) -> Vec<&NutrientRemainder> {
         self.balance.iter().filter(|r| r.remaining_kg_ha > NEGLIGIBLE_KG_HA).collect()
     }
@@ -1673,6 +1875,7 @@ const NEGLIGIBLE_KG_HA: f64 = 0.01;
 /// and already net of soil supply and use efficiency — this module never
 /// re-derives agronomy, it only chooses products.
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn build_program(
     strategy: FertilizationStrategy,
     requirements: &[NutrientRequirement],
@@ -1748,7 +1951,7 @@ pub fn build_program(
     let total_bags_rounded_up =
         lines.iter().filter_map(|line| line.bags).map(|bags| bags.bags_total_rounded_up).sum();
 
-    FertilizerProgram { strategy, composite, lines, balance, total_kg_per_ha, total_kg, total_bags_rounded_up, blend }
+    FertilizerProgram { strategy, blend, composite, lines, balance, total_kg_per_ha, total_kg, total_bags_rounded_up }
 }
 
 /// Reads a catalog row onto the visible basis.
@@ -1783,14 +1986,24 @@ pub fn candidate_from_source(source: &FertilizerSource, oxide_factor: impl Fn(Gr
 /// own away from the terminal that produced it.
 #[derive(Debug, Clone)]
 pub struct ScenarioSummary {
+    /// The lot planned for.
     pub field_id: String,
+    /// The lab report planned from.
     pub sample_id: String,
+    /// The crop planned for.
     pub crop_id: String,
+    /// The yield goal the demand was computed at.
     pub yield_value: f64,
+    /// The unit that goal is stated in.
     pub yield_unit: String,
+    /// Hectares the totals were sized for.
     pub total_area_ha: f64,
+    /// The bag weight the bag counts were computed with.
     pub bag_weight_kg: f64,
+    /// Which strategy produced the chosen program.
     pub strategy: FertilizationStrategy,
+    /// Which reference profile answered. Reported so a printed file says
+    /// which catalog and which literature stand behind it.
     pub profile: String,
 }
 
@@ -1802,14 +2015,22 @@ pub struct ScenarioSummary {
 /// large dose on a poor soil from a large dose for an inflated yield goal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BalanceRow {
+    /// The element this row is about, stated elementally as the soil tests
+    /// and the literature are.
     pub nutrient: Nutrient,
+    /// What the soil supplies over the season, kg/ha.
     pub availability_kg_ha: f64,
+    /// What the crop asks for at the goal, kg/ha.
     pub demand_kg_ha: f64,
     /// `None` when the reference table has no coefficient on either basis —
     /// the demand is unknown, not zero.
     pub demand_basis: Option<String>,
+    /// The recovery fraction the shortfall was divided by.
     pub efficiency_used: f64,
+    /// What actually has to be applied, kg/ha of the element.
     pub net_requirement_kg_ha: f64,
+    /// The reading classified against its critical level, in words.
+    /// `None` when the sample carries no reading for this nutrient.
     pub soil_status: Option<String>,
 }
 
@@ -1817,15 +2038,20 @@ pub struct BalanceRow {
 /// micronutrients and the warnings, all read off the plan.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FertilizationBalance {
+    /// One row per macronutrient the plan computed.
     pub rows: Vec<BalanceRow>,
     /// Recommended CaCO3-equivalent, and the material if one was picked.
     pub liming_t_ha: Option<f64>,
+    /// The material that would cover it. `None` when no lime is called for
+    /// or the catalog offers nothing suitable.
     pub liming_material: Option<String>,
     /// Nutrient, reading with its unit, and the corrective dose if needed.
     pub micronutrients: Vec<(Nutrient, String, Option<String>)>,
     /// Anything the reader has to know to interpret the numbers, in the
     /// plan's own words.
     pub warnings: Vec<String>,
+    /// The factor nitrogen availability was computed with. Reported
+    /// because N availability is directly proportional to it.
     pub mineralization_factor: f64,
     /// `false` means the plan ran on baseline constants.
     pub climate_enriched: bool,
@@ -1835,6 +2061,7 @@ pub struct FertilizationBalance {
 /// of it is rendered.
 #[derive(Debug, Clone)]
 pub struct FertilizerRecommendationReport {
+    /// What was asked for, restated so a printed file stands on its own.
     pub scenario: ScenarioSummary,
     /// Net requirements on the visible basis, as the whole heuristic saw
     /// them.
@@ -1851,6 +2078,7 @@ pub struct FertilizerRecommendationReport {
     pub ratio: Option<RatioConstruction>,
     /// The compound ranking, best first, truncated for reporting.
     pub candidates: Vec<CompositeCandidateScore>,
+    /// The program built with the strategy the caller asked for.
     pub chosen: FertilizerProgram,
     /// The other strategy, always computed, so the two are comparable
     /// without a second run.
@@ -1932,20 +2160,20 @@ mod tests {
         assert_eq!(built.target, CommercialGrade::new(10.0, 13.0, 3.0, 0.0), "ladder was {ladder:?}");
         // 40-50-10 sums to 100%: no such bag can be manufactured.
         assert!(built.steps[0].sum_penalty > 0.0);
-        assert!(built.steps.iter().filter(|step| step.chosen).count() == 1);
+        assert_eq!(built.steps.iter().filter(|step| step.chosen).count(), 1);
     }
 
     #[test]
     fn the_target_coefficients_are_the_worked_examples() {
         let target = CommercialGrade::new(10.0, 13.0, 3.0, 0.0);
         let coefficients = target.coefficients();
-        assert!((coefficients.n_over_p.expect("N/P") - 0.769230).abs() < 1e-5);
-        assert!((coefficients.p_over_k.expect("P/K") - 4.333333).abs() < 1e-5);
+        assert!((coefficients.n_over_p.expect("N/P") - 0.769_230).abs() < 1e-5);
+        assert!((coefficients.p_over_k.expect("P/K") - 4.333_333).abs() < 1e-5);
         assert_eq!(coefficients.k_over_s, None, "a sulfur-free grade has no K/S");
 
         let control = CommercialGrade::new(13.0, 26.0, 6.0, 0.0).coefficients();
         assert!((control.n_over_p.expect("N/P") - 0.5).abs() < 1e-9);
-        assert!((control.p_over_k.expect("P/K") - 4.333333).abs() < 1e-5);
+        assert!((control.p_over_k.expect("P/K") - 4.333_333).abs() < 1e-5);
     }
 
     #[test]
@@ -2493,8 +2721,8 @@ mod tests {
             restrictions: vec!["Comercialización regional".to_string()],
         };
         let candidate = candidate_from_source(&source, |nutrient| match nutrient {
-            GradeNutrient::P2O5 => Some(2.291108362),
-            GradeNutrient::K2O => Some(1.204593799),
+            GradeNutrient::P2O5 => Some(2.291_108_362),
+            GradeNutrient::K2O => Some(1.204_593_799),
             _ => None,
         });
 

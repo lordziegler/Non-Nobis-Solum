@@ -19,6 +19,10 @@ struct LimingRulesRow {
     region: String,
     al_factor: f64,
     target_base_saturation_pct: f64,
+    // Parsed and never read. Keeping the field is what makes serde
+    // *require* it: a liming row without its citation fails to load
+    // instead of planning off an untraceable figure. See
+    // `data/reference/README.md`.
     #[allow(dead_code)]
     source: String,
 }
@@ -28,11 +32,20 @@ struct LimingRulesFile {
     rules: Vec<LimingRulesRow>,
 }
 
+/// The profile's liming constants, loaded once into memory.
+///
+/// Keyed by region with a sentinel fallback, so a lot naming a region the
+/// profile does not list still gets the profile's general rule.
 pub struct StaticLimingRulesRepo {
     rules: Vec<LimingRulesRow>,
 }
 
 impl StaticLimingRulesRepo {
+    /// Loads the profile's liming constants once, at construction.
+    ///
+    /// # Errors
+    /// `DataSource` when the file cannot be read or is not the TOML shape
+    /// the rules are written in.
     pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, DomainError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| DomainError::DataSource(format!("{}: {e}", path.display())))?;

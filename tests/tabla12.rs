@@ -5,6 +5,11 @@
 //! a real reference table read through a real CSV adapter — `core` may not
 //! reach into `infra`, not even from a test.
 
+// Asserting an exact `0.0`: the requirement is not "close to nothing", it is
+// the nutrient never entering the plan at all. An epsilon would let a real
+// dose through.
+#![allow(clippy::float_cmp)]
+
 use non_nobis_solum::core::application::FertilityScenario;
 use non_nobis_solum::core::domain::{FertilityPlan, NutrientDemandMode};
 use non_nobis_solum::core::ports::{FertilityCalculatorPort, InspectScenarioPort};
@@ -32,7 +37,7 @@ fn plan(lot: &str, crop: &str) -> FertilityPlan {
 }
 
 /// The whole point of splitting the requirement: Tabla 12's note says
-/// 1 t/ha of CaCO3 equals 0.36 t hydrated lime + 0.48 t dolomite + 0.17 t
+/// 1 t/ha of `CaCO3` equals 0.36 t hydrated lime + 0.48 t dolomite + 0.17 t
 /// Paz del Río slag. If the oxide equivalents in `liming_materials.csv` or
 /// the share arithmetic drift, these ratios stop reproducing the table.
 #[test]

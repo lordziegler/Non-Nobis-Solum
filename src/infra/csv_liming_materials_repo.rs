@@ -26,11 +26,25 @@ struct LimingMaterialRow {
     restrictions: Option<String>,
 }
 
+/// Reads the liming material catalog from a CSV file.
+///
+/// Holds only the path: the file is opened per query rather than
+/// cached, so an edit made while the app runs is picked up on the next
+/// read.
 pub struct CsvLimingMaterialsRepo {
     path: PathBuf,
 }
 
 impl CsvLimingMaterialsRepo {
+    /// Points the repository at the liming materials CSV.
+    ///
+    /// # Arguments
+    /// * `path` — the file to read. Not opened here, so a path that
+    ///   does not exist yet is accepted and fails at the first query.
+    ///
+    /// # Returns
+    /// A repository reading that file.
+    #[must_use]
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self { path: path.as_ref().to_path_buf() }
     }

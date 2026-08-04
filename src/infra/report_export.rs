@@ -25,6 +25,10 @@ use crate::infra::{report_renderer, PdfReportExporter};
 /// Picks the exporter from the path's extension. An unknown extension is
 /// refused by name rather than guessed at: writing a PDF to `plan.xlsx`
 /// would be worse than saying no.
+///
+/// # Errors
+/// `InvalidInput` when the extension names no exporter this project writes;
+/// `DataSource` when the destination cannot be created or written.
 pub fn export(report: &FertilizerRecommendationReport, destination: &Path) -> Result<(), DomainError> {
     match destination.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref() {
         Some("pdf") => PdfReportExporter.export(report, destination),
@@ -34,7 +38,7 @@ pub fn export(report: &FertilizerRecommendationReport, destination: &Path) -> Re
         other => Err(DomainError::InvalidInput(format!(
             "cannot export to `{}`: expected .pdf, .md, .csv or .txt, got {}",
             destination.display(),
-            other.map(|e| format!(".{e}")).unwrap_or_else(|| "no extension".to_string())
+            other.map_or_else(|| "no extension".to_string(), |e| format!(".{e}"))
         ))),
     }
 }
@@ -218,7 +222,7 @@ mod tests {
             other => Err(DomainError::InvalidInput(format!(
                 "cannot export to `{}`: expected .pdf, .md, .csv or .txt, got {}",
                 destination.display(),
-                other.map(|e| format!(".{e}")).unwrap_or_else(|| "no extension".to_string())
+                other.map_or_else(|| "no extension".to_string(), |e| format!(".{e}"))
             ))),
         }
     }

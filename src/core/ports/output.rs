@@ -12,19 +12,40 @@ use crate::core::domain::{
     Texture, YieldTarget,
 };
 
+/// The curated lab analyses.
 pub trait SoilTestRepository {
+    /// # Errors
+    /// `DataSource` when the curated analyses cannot be read or a row does
+    /// not parse. An unknown `sample_id` is an empty vector, not an error:
+    /// a lot with no analyses yet is a normal state.
     fn get_tests_by_sample_id(&self, sample_id: &str) -> Result<Vec<SoilTest>, DomainError>;
 }
 
+/// The curated lots.
 pub trait FieldContextRepository {
+    /// # Errors
+    /// `NotFound` when no curated lot carries that `field_id`;
+    /// `DataSource` when the file cannot be read or a row does not parse.
     fn get_context_by_field_id(&self, field_id: &str) -> Result<FieldContext, DomainError>;
     /// Every curated lot, in file order — a lot is a lot whether or not
     /// anything is planned on it.
+    ///
+    /// # Errors
+    /// `DataSource` when the file cannot be read or a row does not parse.
+    /// No curated lots at all is an empty vector, not an error.
     fn list_contexts(&self) -> Result<Vec<FieldContext>, DomainError>;
 }
 
+/// The curated planning rows: which crop is planned on which lot, at what
+/// goal.
 pub trait YieldTargetRepository {
+    /// # Errors
+    /// `NotFound` when that lot has no goal curated for that crop — the
+    /// caller is expected to ask for one rather than assume a yield;
+    /// `DataSource` when the file cannot be read or a row does not parse.
     fn get_yield_target(&self, field_id: &str, crop_id: &str) -> Result<YieldTarget, DomainError>;
+    /// # Errors
+    /// `DataSource` when the file cannot be read or a row does not parse.
     fn list_targets(&self) -> Result<Vec<LotYieldTarget>, DomainError>;
 }
 
@@ -50,12 +71,29 @@ pub trait YieldTargetRepository {
 /// the original intact rather than a half-written file. This is somebody's
 /// only copy of their own soil analyses.
 pub trait CuratedDataWriter {
+    /// # Errors
+    /// `InvalidInput` when a row already carries that `field_id` — an
+    /// append may not become a silent overwrite, use `replace_field_context`
+    /// to edit; `DataSource` when the file cannot be read or written.
     fn save_field_context(&self, context: &FieldContext) -> Result<(), DomainError>;
+    /// # Errors
+    /// `DataSource` when the file cannot be read or written. A repeated
+    /// reading is not an error: the reader takes the last row, so an append
+    /// is how a correction supersedes the value it replaces.
     fn save_soil_tests(&self, tests: &[SoilTest]) -> Result<(), DomainError>;
+    /// # Errors
+    /// `DataSource` when the file cannot be read or written. As with the
+    /// analyses, a repeated `(field_id, crop_id)` supersedes rather than
+    /// conflicts.
     fn save_yield_target(&self, field_id: &str, crop_id: &str, target: &YieldTarget) -> Result<(), DomainError>;
 
     /// Rewrites the lot's row in place. `NotFound` when no row carries that
     /// `field_id`, so an edit can never silently become an insert.
+    ///
+    /// # Errors
+    /// `NotFound` when no row carries that `field_id`; `DataSource` when
+    /// the file cannot be read, or the rewritten file cannot be written or
+    /// renamed over the original.
     fn replace_field_context(&self, context: &FieldContext) -> Result<(), DomainError>;
 
     /// Drops every row for `field_id` from all three curated files: the
@@ -64,24 +102,43 @@ pub trait CuratedDataWriter {
     /// The one destructive operation in the project, which is why it lives
     /// on the port rather than being assembled from three calls by a
     /// front-end that could get half way and stop.
+    ///
+    /// # Errors
+    /// `NotFound` when no lot carries that `field_id`, checked before
+    /// anything is removed; `DataSource` when any of the three files cannot
+    /// be read, rewritten or renamed.
     fn delete_lot(&self, field_id: &str) -> Result<usize, DomainError>;
 }
 
+/// The crop catalog.
 pub trait CropCatalogRepository {
+    /// # Errors
+    /// `DataSource` when the crop catalog cannot be read or a row does not
+    /// parse.
     fn list_crops(&self) -> Result<Vec<Crop>, DomainError>;
 }
 
+/// The crop demand coefficients: how much of a nutrient a tonne of yield
+/// asks for.
 pub trait NutrientRemovalRepository {
     /// Both coefficients plus dataset provenance. `NotFound` means the
     /// table has no row at all for this crop and nutrient; a row that
     /// exists but leaves one basis blank is a `Some` reference with a
     /// `None` coefficient, which the caller resolves — the two are
     /// different facts and only the caller knows what to do about each.
+    ///
+    /// # Errors
+    /// `NotFound` when the table has no row for that crop and nutrient;
+    /// `DataSource` when the table cannot be read or a row does not parse.
     fn describe_removal(&self, crop_id: &str, nutrient_id: &str) -> Result<RemovalReference, DomainError>;
 }
 
 /// cmolc/kg -> mg/kg, P -> P2O5, etc.
 pub trait ConversionFactorsRepository {
+    /// # Errors
+    /// `NotFound` when the table states no factor between those two units
+    /// for that nutrient — which is what stops a reading in an
+    /// unconvertible unit from silently entering a plan.
     fn convert(&self, from_unit: &str, to_unit: &str, nutrient_id: &str, value: f64) -> Result<f64, DomainError>;
 }
 
@@ -94,11 +151,22 @@ pub trait ConversionFactorsRepository {
 /// measured condition, so there is no region axis for a sentinel to
 /// reconcile — see `toml_efficiency_bands_repo`.
 pub trait EfficiencyBandRepository {
+    /// # Errors
+    /// `DataSource` when the profile's band table cannot be read or does
+    /// not parse, including a band whose factor is outside the range a
+    /// modifier may take — the table is refused at load rather than
+    /// producing an impossible efficiency later.
     fn band_rules(&self) -> Result<EfficiencyBandRules, DomainError>;
 }
 
+/// The base efficiency ranges, before any site condition moves them.
 pub trait EfficiencyRulesRepository {
     /// `(efficiency_min, efficiency_max)` as fractions (0.0-1.0).
+    ///
+    /// # Errors
+    /// `NotFound` when the profile states no row for that nutrient, not
+    /// even the sentinel that covers every texture and irrigation system;
+    /// `DataSource` when the rules file cannot be read or does not parse.
     fn get_efficiency_range(
         &self,
         texture: &Texture,
@@ -115,6 +183,10 @@ pub trait EfficiencyRulesRepository {
 /// caller cannot say, and a nutrient whose thresholds do differ by method
 /// then answers `NotFound` rather than guessing one.
 pub trait CriticalLevelsRepository {
+    /// # Errors
+    /// `NotFound` when no row covers that nutrient, or when the nutrient's
+    /// thresholds differ by extraction method and the caller named none;
+    /// `DataSource` when the table cannot be read or a row does not parse.
     fn get_critical_level(
         &self,
         nutrient_id: &str,
@@ -139,10 +211,18 @@ pub trait SoilQualityThresholdsRepository {
     /// An empty vector rather than `NotFound` for an unknown property:
     /// nothing here is required for a plan, so a missing table leaves a
     /// reading uninterpreted instead of failing anything.
+    ///
+    /// # Errors
+    /// `DataSource` when the table cannot be read or a row does not parse.
+    /// An unknown property is an empty vector, never an error.
     fn bands(&self, property: &str, climate_zone: &str) -> Result<Vec<QualitativeBand>, DomainError>;
 }
 
+/// The catalog of purchasable products.
 pub trait FertilizerSourceRepository {
+    /// # Errors
+    /// `DataSource` when the fertilizer catalog cannot be read or a row
+    /// does not parse.
     fn list_sources(&self) -> Result<Vec<FertilizerSource>, DomainError>;
 }
 
@@ -154,17 +234,31 @@ pub trait FertilizerSourceRepository {
 /// adapter's business. `destination` is a `Path` because the user names it
 /// per run; the adapter still owns every byte written to it.
 pub trait ReportExporter {
+    /// # Errors
+    /// `InvalidInput` when `destination` carries an extension no adapter
+    /// writes; `DataSource` when the file cannot be created or written.
     fn export(&self, report: &FertilizerRecommendationReport, destination: &std::path::Path) -> Result<(), DomainError>;
 }
 
 /// Literature constants for liming.
 pub trait LimingRulesRepository {
+    /// # Errors
+    /// `NotFound` when neither the named region nor the sentinel that
+    /// stands in for it states a factor; `DataSource` when the rules file
+    /// cannot be read or does not parse.
     fn al_factor(&self, region: &str) -> Result<f64, DomainError>;
+    /// # Errors
+    /// `NotFound` when neither the named region nor the sentinel states a
+    /// target; `DataSource` when the rules file cannot be read or does not
+    /// parse.
     fn target_base_saturation_pct(&self, region: &str) -> Result<f64, DomainError>;
 }
 
 /// Kept separate from `FertilizerSourceRepository`: see `LimingMaterial`.
 pub trait LimingMaterialRepository {
+    /// # Errors
+    /// `DataSource` when the materials table cannot be read or a row does
+    /// not parse.
     fn list_materials(&self) -> Result<Vec<LimingMaterial>, DomainError>;
 }
 
@@ -176,5 +270,9 @@ pub trait LimingMaterialRepository {
 /// `Err` as "degrade", not "fail" — see
 /// `DomainError::ExternalServiceUnavailable`.
 pub trait AgroclimaticRepository {
+    /// # Errors
+    /// `ExternalServiceUnavailable` when the provider cannot be reached or
+    /// answers with something that is not a climatology — callers degrade
+    /// to the baseline on this rather than failing the plan.
     fn fetch_climatology(&self, latitude: f64, longitude: f64) -> Result<AnnualClimatology, DomainError>;
 }

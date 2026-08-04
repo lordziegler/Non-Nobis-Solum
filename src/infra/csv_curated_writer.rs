@@ -11,6 +11,12 @@ use std::path::{Path, PathBuf};
 use crate::core::domain::{DomainError, FieldContext, SoilTest, YieldTarget};
 use crate::core::ports::CuratedDataWriter;
 
+/// Writes the three curated files: the lots, their analyses and their
+/// planning rows.
+///
+/// The only adapter in the project that writes. Holds the three paths
+/// because a lot's rows live in all of them, and deleting one has to reach
+/// every file in the same call rather than leave a half-removed lot behind.
 pub struct CsvCuratedWriter {
     field_context: PathBuf,
     soil_tests: PathBuf,
@@ -18,6 +24,16 @@ pub struct CsvCuratedWriter {
 }
 
 impl CsvCuratedWriter {
+    /// Points the writer at the three curated files.
+    ///
+    /// # Arguments
+    /// * `field_context` — the lots file.
+    /// * `soil_tests` — the lab analyses file.
+    /// * `yield_targets` — the planning rows file.
+    ///
+    /// # Returns
+    /// A writer over those three paths. None is opened or created here.
+    #[must_use]
     pub fn new(field_context: impl AsRef<Path>, soil_tests: impl AsRef<Path>, yield_targets: impl AsRef<Path>) -> Self {
         Self {
             field_context: field_context.as_ref().to_path_buf(),
@@ -159,18 +175,12 @@ impl CuratedDataWriter for CsvCuratedWriter {
 
         // Checked after the rewrite rather than before: one pass over the
         // file, and an edit that matched nothing has changed nothing.
-        match found {
-            true => Ok(()),
-            false => Err(DomainError::NotFound(format!("no lot {} to edit", context.field_id))),
-        }
+        if found { Ok(()) } else { Err(DomainError::NotFound(format!("no lot {} to edit", context.field_id))) }
     }
 
     fn delete_lot(&self, field_id: &str) -> Result<usize, DomainError> {
         let drop_matching = |path: &Path, column: usize| {
-            rewrite(path, |row| match row.get(column) == Some(field_id) {
-                true => None,
-                false => Some(row.iter().map(String::from).collect()),
-            })
+            rewrite(path, |row| if row.get(column) == Some(field_id) { None } else { Some(row.iter().map(String::from).collect()) })
         };
         // The lot last: if a later file fails, the lot is still there to
         // retry against rather than orphaning its analyses.
@@ -201,10 +211,7 @@ impl CuratedDataWriter for CsvCuratedWriter {
             }
             Some(row.iter().map(String::from).collect())
         })?;
-        match replaced {
-            true => Ok(()),
-            false => append(&self.yield_targets, &[record]),
-        }
+        if replaced { Ok(()) } else { append(&self.yield_targets, &[record]) }
     }
 
     /// Same rule as the yield goals, and for the same reason:
@@ -584,8 +591,7 @@ mod tests {
 
         assert!(CsvSoilTestsRepo::new(sandbox.dir.join("soil_tests.csv"))
             .get_tests_by_sample_id("LOT-001")
-            .map(|tests| tests.is_empty())
-            .unwrap_or(true));
+            .map_or(true, |tests| tests.is_empty()));
         assert!(!CsvSoilTestsRepo::new(sandbox.dir.join("soil_tests.csv"))
             .get_tests_by_sample_id("LOT-002")
             .expect("the other sample survives")

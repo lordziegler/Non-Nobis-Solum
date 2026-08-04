@@ -1,3 +1,7 @@
+//! `nns`: the command-line front-end. Argument parsing lives in
+//! `cli_adapter`, so this is only the process boundary — wire up, run,
+//! and turn a `DomainError` into an exit code.
+
 use clap::Parser;
 use non_nobis_solum::infra::cli_adapter::{self, Cli};
 

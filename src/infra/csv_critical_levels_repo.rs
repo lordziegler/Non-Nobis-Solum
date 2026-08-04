@@ -62,11 +62,25 @@ fn same_method(a: &str, b: &str) -> bool {
     letters(a) == letters(b)
 }
 
+/// Reads the per-nutrient critical levels from a CSV file.
+///
+/// Holds only the path: the file is opened per query rather than
+/// cached, so an edit made while the app runs is picked up on the next
+/// read.
 pub struct CsvCriticalLevelsRepo {
     path: PathBuf,
 }
 
 impl CsvCriticalLevelsRepo {
+    /// Points the repository at the critical levels CSV.
+    ///
+    /// # Arguments
+    /// * `path` — the file to read. Not opened here, so a path that
+    ///   does not exist yet is accepted and fails at the first query.
+    ///
+    /// # Returns
+    /// A repository reading that file.
+    #[must_use]
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self { path: path.as_ref().to_path_buf() }
     }
@@ -103,7 +117,6 @@ impl CriticalLevelsRepository for CsvCriticalLevelsRepo {
             // is the axis the numbers actually differ along.
             if method_matches || (row.extraction_method == ANY && fallback.is_none()) {
                 fallback = Some(row);
-                continue;
             }
         }
 
@@ -119,6 +132,7 @@ impl CriticalLevelsRepository for CsvCriticalLevelsRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::SoilStatus;
 
     fn repo() -> CsvCriticalLevelsRepo {
         CsvCriticalLevelsRepo::new("data/reference/global/critical_levels.csv")
@@ -136,7 +150,6 @@ mod tests {
 
         // 18 mg/kg is "low" by Bray II and "medium" by Olsen. Getting this
         // backwards is a real P recommendation moved by a whole tier.
-        use crate::core::domain::SoilStatus;
         assert_eq!(bray.classify(18.0), SoilStatus::Low);
         assert_eq!(olsen.classify(18.0), SoilStatus::Medium);
     }

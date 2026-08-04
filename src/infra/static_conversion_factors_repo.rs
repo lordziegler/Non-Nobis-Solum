@@ -15,11 +15,22 @@ struct ConversionFactorsFile {
     unit_conversion: HashMap<String, f64>,
 }
 
+/// The unit and basis conversion table, loaded once into memory.
+///
+/// Unlike the CSV repositories this one holds the parsed table rather than
+/// a path: it is small, shared by every profile, and consulted several
+/// times per plan.
 pub struct StaticConversionFactorsRepo {
     unit_conversion: HashMap<String, f64>,
 }
 
 impl StaticConversionFactorsRepo {
+    /// Loads the shared conversion table once, at construction: a factor
+    /// that is missing is a broken install, not a per-call condition.
+    ///
+    /// # Errors
+    /// `DataSource` when the file cannot be read or is not the TOML shape
+    /// the table is written in.
     pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, DomainError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| DomainError::DataSource(format!("{}: {e}", path.display())))?;

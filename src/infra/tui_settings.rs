@@ -31,6 +31,7 @@ pub struct TuiSettings {
     pub language: String,
     /// The theme's own name, matched against `theme::THEMES`.
     pub theme: String,
+    /// Which reference profile the session reads its tables from.
     pub profile: String,
     /// `composite_plus_simple` or `simple_blend_only`.
     pub strategy: String,
@@ -43,6 +44,8 @@ pub struct TuiSettings {
     /// yet", and one that no longer exists is not restored — see
     /// `Tui::new`.
     pub lot: String,
+    /// The crop of the last session, restored only onto a lot that still
+    /// carries a goal for it.
     pub crop: String,
 }
 
@@ -93,6 +96,7 @@ pub fn settings_path() -> PathBuf {
 /// and says nothing; a corrupt one falls back to defaults and **says so**,
 /// because silently reverting somebody's preferences looks like the app
 /// forgetting rather than the file being broken.
+#[must_use]
 pub fn load() -> (TuiSettings, Option<String>) {
     let path = settings_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -109,6 +113,12 @@ pub fn load() -> (TuiSettings, Option<String>) {
 
 /// Best effort, and the caller is expected to keep going: failing to store
 /// a theme is not a reason to refuse to draw one.
+///
+/// # Errors
+/// The message to show, as a plain `String` rather than a `DomainError`:
+/// the config directory could not be created, the settings could not be
+/// serialised, or the file could not be written. Nothing here reaches the
+/// domain, so nothing here needs a domain error.
 pub fn save(settings: &TuiSettings) -> Result<(), String> {
     let path = settings_path();
     if let Some(parent) = path.parent() {

@@ -75,6 +75,7 @@ pub const CURATED: [ShippedFile; 3] = [
 ];
 
 /// What [`CURATED`] actually seeds: the header row, newline included.
+#[must_use]
 pub fn header_of(contents: &str) -> String {
     let header = contents.lines().next().unwrap_or_default();
     format!("{header}\n")

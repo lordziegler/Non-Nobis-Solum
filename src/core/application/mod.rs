@@ -1,5 +1,13 @@
+//! Use cases: one module per thing a front-end can ask for.
+//!
+//! Each one owns a workflow end to end — it holds the ports it needs, and
+//! nothing here reaches for a file, a terminal or a network. The re-exports
+//! below are the whole application-layer vocabulary; a front-end should not
+//! need to name a submodule.
+
 pub mod calculate_fertility_plan;
 pub mod inspect_scenario;
+/// Lists the curated lots with enough of each to choose one.
 pub mod list_lots;
 pub mod list_supported_crops;
 pub mod recommend_fertilizer_program;

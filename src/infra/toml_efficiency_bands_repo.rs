@@ -32,6 +32,10 @@ struct BandRow {
 struct FloorRow {
     nutrient: String,
     efficiency_floor: f64,
+    // Parsed and never read. Keeping the field is what makes serde
+    // *require* it: a floor row without its citation fails to load
+    // instead of planning off an untraceable figure. See
+    // `data/reference/README.md`.
     #[allow(dead_code)]
     source: String,
 }
@@ -45,11 +49,23 @@ struct EfficiencyBandsFile {
     floor: Vec<FloorRow>,
 }
 
+/// The profile's efficiency band table, loaded and validated once.
+///
+/// Held in memory rather than re-read because every nutrient of every plan
+/// consults it, and because the validation it passes at load is what lets
+/// the domain treat a band factor as already sane.
 pub struct TomlEfficiencyBandsRepo {
     rules: EfficiencyBandRules,
 }
 
 impl TomlEfficiencyBandsRepo {
+    /// Loads and *checks* the profile's band table at construction.
+    ///
+    /// # Errors
+    /// `DataSource` when the file cannot be read, is not the expected TOML
+    /// shape, or states a band whose factor is outside the range a modifier
+    /// may take. The last one is refused here rather than allowed to
+    /// produce an impossible efficiency in a plan later.
     pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, DomainError> {
         let path = path.as_ref();
         let text =

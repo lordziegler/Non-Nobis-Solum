@@ -23,17 +23,34 @@ struct EfficiencyRuleRow {
     nutrient: String,
     efficiency_min: f64,
     efficiency_max: f64,
+    // Parsed and never read. Keeping the field is what makes serde
+    // *require* it: a rule row without its citation fails to load
+    // instead of planning off an untraceable figure. See
+    // `data/reference/README.md`.
     #[allow(dead_code)]
     source: String,
+    // Same: the region a rule was measured in is not dispatched on yet,
+    // and a rule that does not say where it came from should not load.
     #[allow(dead_code)]
     region: String,
 }
 
+/// The profile's base efficiency ranges, loaded and validated once.
+///
+/// Rows are keyed on texture, irrigation system and nutrient, with a
+/// sentinel row covering the combinations a profile does not spell out.
 pub struct YamlEfficiencyRulesRepo {
     rules: Vec<EfficiencyRuleRow>,
 }
 
 impl YamlEfficiencyRulesRepo {
+    /// Loads and *checks* the profile's efficiency rules at construction.
+    ///
+    /// # Errors
+    /// `DataSource` when the file cannot be read, is not the expected YAML
+    /// shape, or states a range that cannot be used — a minimum above its
+    /// maximum, or either end outside 0.0-1.0. Refused at load so no plan
+    /// is ever built on an unusable range.
     pub fn from_yaml_file(path: impl AsRef<Path>) -> Result<Self, DomainError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| DomainError::DataSource(format!("{}: {e}", path.display())))?;

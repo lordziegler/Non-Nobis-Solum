@@ -30,11 +30,20 @@ const PARAMETERS: &str = "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN,ALLSKY_SFC_SW_DWN,TOA_
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Fetches a 30-year climatology from NASA POWER.
+///
+/// The only adapter that leaves the machine. Its errors are
+/// `ExternalServiceUnavailable` throughout, because a caller is expected to
+/// degrade to the baseline rather than fail a plan over a network.
 pub struct NasaPowerRepo {
     http: reqwest::blocking::Client,
 }
 
 impl NasaPowerRepo {
+    /// # Errors
+    /// `ExternalServiceUnavailable` when the HTTP client cannot be built —
+    /// a TLS backend that will not initialise. Building the client makes no
+    /// network call, so this does not fail for being offline.
     pub fn new() -> Result<Self, DomainError> {
         let http = reqwest::blocking::Client::builder()
             .timeout(TIMEOUT)
@@ -76,6 +85,12 @@ impl AgroclimaticRepository for NasaPowerRepo {
 }
 
 /// Split out from the HTTP call so the reduction is testable offline.
+///
+/// # Errors
+/// `ExternalServiceUnavailable` when `body` is not the JSON shape NASA
+/// POWER documents — which includes the provider's own error payloads, so a
+/// rejected request becomes a decode failure rather than a silently empty
+/// climatology. A parameter the response omits is `None`, not an error.
 pub fn climatology_from(body: &str) -> Result<AnnualClimatology, DomainError> {
     let raw: PowerResponse = serde_json::from_str(body)
         .map_err(|e| DomainError::ExternalServiceUnavailable(format!("could not decode NASA POWER response: {e}")))?;
@@ -134,7 +149,7 @@ fn monthly_et0_mean(parameters: &BTreeMap<String, BTreeMap<String, f64>>) -> Opt
         months += 1;
     }
 
-    (months == 12).then(|| total / months as f64)
+    (months == 12).then(|| total / f64::from(months))
 }
 
 // ---- Raw wire format -------------------------------------------------------

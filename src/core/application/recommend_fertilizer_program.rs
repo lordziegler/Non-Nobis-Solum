@@ -1,6 +1,7 @@
 //! Turns a computed [`FertilityPlan`] into products to buy.
 //!
-//! A second use case rather than a wider [`CalculateFertilityPlan`]: the
+//! A second use case rather than a wider
+//! [`CalculateFertilityPlan`](crate::core::application::CalculateFertilityPlan): the
 //! balance ("how much N does this crop still need") and the formulation
 //! ("which bag, how many, and how many bags") are different questions with
 //! different inputs, and the first has been answered and tested for
@@ -21,6 +22,8 @@ use crate::core::ports::{ConversionFactorsRepository, FertilizerSourceRepository
 /// The knobs a formulation needs and the balance does not.
 #[derive(Debug, Clone)]
 pub struct FormulationRequest {
+    /// Whether compound products may be used, or the program must be built
+    /// from straights alone.
     pub strategy: FertilizationStrategy,
     /// Hectares the recommendation is bought for. 1.0 reports per-hectare
     /// figures unchanged.
@@ -48,12 +51,21 @@ impl Default for FormulationRequest {
     }
 }
 
+/// The product half of a plan: turns nutrient kilograms into bags.
 pub struct RecommendFertilizerProgram {
     fertilizer_sources: Box<dyn FertilizerSourceRepository>,
     conversion_factors: Box<dyn ConversionFactorsRepository>,
 }
 
 impl RecommendFertilizerProgram {
+    /// # Arguments
+    /// * `fertilizer_sources` — the catalog to pick products from.
+    /// * `conversion_factors` — moves elemental P and K onto the oxide
+    ///   basis the commercial grades are stated in.
+    ///
+    /// # Returns
+    /// The use case, ready to formulate.
+    #[must_use]
     pub fn new(
         fertilizer_sources: Box<dyn FertilizerSourceRepository>,
         conversion_factors: Box<dyn ConversionFactorsRepository>,
@@ -333,7 +345,7 @@ fn assumptions(
             .to_string(),
     ];
 
-    if !catalog.iter().any(|candidate| candidate.is_compound()) {
+    if !catalog.iter().any(super::super::domain::formulation::CompositeCandidate::is_compound) {
         assumptions.push(
             "This profile's catalog carries no compound product at all, so the compound strategy falls back to \
              straights."

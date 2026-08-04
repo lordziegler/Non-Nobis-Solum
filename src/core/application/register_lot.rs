@@ -14,41 +14,85 @@ use crate::core::ports::{CuratedDataWriter, FieldContextRepository, RegisterLotP
 /// `yield_value` write the lot's first planning row when both are given.
 #[derive(Debug, Clone, Default)]
 pub struct LotRegistration {
+    /// The id to file the lot under. Must be unique — a duplicate is
+    /// refused rather than merged.
     pub field_id: String,
+    /// Parsed into [`Texture`]; anything the closed set does not name is
+    /// refused.
     pub texture: String,
+    /// Parsed into [`IrrigationSystem`].
     pub irrigation_system: String,
+    /// Percent by mass. Must parse as a number in the admissible range.
     pub organic_matter_percent: String,
+    /// Soil reaction. Must parse as a number in the admissible range.
     pub ph: String,
+    /// Cation exchange capacity in cmolc/kg.
     pub cec_cmolc_kg: String,
+    /// Bulk density in kg/dm³.
     pub bulk_density_kg_dm3: String,
+    /// Depth of the planned layer, in metres.
     pub arable_depth_m: String,
+    /// Which regional rows of the reference tables apply.
     pub region: String,
+    /// Decimal degrees, or empty. Empty is not an error: a lot without
+    /// coordinates simply gets no climate enrichment.
     pub latitude: String,
+    /// Decimal degrees, or empty. Only useful together with `latitude`.
     pub longitude: String,
+    /// Metres above sea level, or empty. Empty leaves organic matter to be
+    /// interpreted against the fetched temperature, or not at all.
     pub altitude_m: String,
+    /// Planted hectares, or empty. Empty means the report gives kg/ha and
+    /// no totals rather than totals from a fabricated area.
     pub area_ha: String,
+    /// The crop to open a planning row for, or empty. Empty registers the
+    /// lot with nothing planned on it, which is a normal state.
     pub crop_id: String,
+    /// The yield goal for `crop_id`. Written only when both it and the
+    /// crop are present.
     pub yield_value: String,
+    /// The unit `yield_value` is stated in. Must be the unit the crop's
+    /// removal coefficients are stated per.
     pub yield_unit: String,
 }
 
 /// One lab result as typed by a user, for an existing lot.
 #[derive(Debug, Clone, Default)]
 pub struct SoilTestEntry {
+    /// The element's symbol, parsed into [`Nutrient`].
     pub nutrient_id: String,
+    /// The reading. Must parse as a number.
     pub value: String,
+    /// The unit the lab reported in. Kept as reported; conversion happens
+    /// when a consumer needs a different one.
     pub unit: String,
+    /// The lab extraction. Not decoration — it selects which critical
+    /// levels the reading is judged against.
     pub method: String,
+    /// Top of the sampled layer, in cm.
     pub depth_from_cm: String,
+    /// Bottom of the sampled layer, in cm.
     pub depth_to_cm: String,
 }
 
+/// The write use case: everything that changes curated data on disk.
+///
+/// Takes raw text throughout and parses it here, so no front-end can reach
+/// the writer without passing the same validation.
 pub struct RegisterLot {
     field_context: Box<dyn FieldContextRepository>,
     writer: Box<dyn CuratedDataWriter>,
 }
 
 impl RegisterLot {
+    /// # Arguments
+    /// * `field_context` — read side, used to check a lot exists (or does
+    ///   not) before a write is attempted.
+    /// * `writer` — the one write port.
+    ///
+    /// # Returns
+    /// The use case, ready to validate and write.
+    #[must_use]
     pub fn new(field_context: Box<dyn FieldContextRepository>, writer: Box<dyn CuratedDataWriter>) -> Self {
         Self { field_context, writer }
     }

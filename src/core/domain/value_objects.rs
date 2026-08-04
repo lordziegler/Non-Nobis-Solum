@@ -1,3 +1,12 @@
+//! Small closed types the model is stated in: textures, climate zones,
+//! irrigation systems, fertilizer forms, soil-status classes, depths and
+//! yield goals.
+//!
+//! Each replaces a string that would otherwise be compared by spelling in
+//! several places. They round-trip through `Display`/`FromStr`, which is
+//! how they survive a CSV column, and the parse is where a value the model
+//! does not recognise is stopped.
+
 use super::errors::DomainError;
 use std::fmt;
 use std::str::FromStr;
@@ -5,7 +14,10 @@ use std::str::FromStr;
 /// A depth range within a soil profile, in centimeters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Depth {
+    /// Top of the sampled layer, in cm below the surface.
     pub from_cm: f64,
+    /// Bottom of the sampled layer, in cm below the surface. Always the
+    /// deeper of the two.
     pub to_cm: f64,
 }
 
@@ -13,17 +25,32 @@ pub struct Depth {
 /// nitrogen use efficiency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Texture {
+    /// Coarsest class. Holds the least water and loses mobile nutrients
+    /// fastest, so N and K carry their heaviest leaching penalty here.
     Sand,
+    /// Sand with enough fines to hold slightly more than a pure sand.
     LoamySand,
+    /// The coarse end of the loams; still leaches noticeably.
     SandyLoam,
+    /// The balanced middle of the triangle, and the reference class most
+    /// literature ranges are stated against.
     Loam,
+    /// Loam dominated by silt; holds water well.
     SiltLoam,
+    /// Almost pure silt.
     Silt,
+    /// Loam carrying both sand and appreciable clay.
     SandyClayLoam,
+    /// The clay end of the loams. Fixation of P starts to matter here.
     ClayLoam,
+    /// Clay loam dominated by silt rather than sand.
     SiltyClayLoam,
+    /// Clay with a substantial sand fraction.
     SandyClay,
+    /// Clay with a substantial silt fraction.
     SiltyClay,
+    /// Finest class. Fixes phosphorus hardest and, when heavy, restricts
+    /// the aeration nitrogen transformations need.
     Clay,
 }
 
@@ -91,13 +118,22 @@ impl fmt::Display for Texture {
 /// Drives nitrogen and potassium use efficiency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IrrigationSystem {
+    /// No irrigation. The only system the water-deficit rules apply to —
+    /// an irrigated lot is not judged against its rainfall.
     Rainfed,
+    /// Surface/furrow irrigation. The least uniform, so the most nutrient
+    /// moved past the root zone.
     Gravity,
+    /// Overhead sprinkler.
     Sprinkler,
+    /// Localised drip. The most uniform, and the system fertigation can
+    /// place nutrient most precisely through.
     Drip,
 }
 
 impl IrrigationSystem {
+    /// Every system, so a front-end can offer the closed set instead of
+    /// drifting from `from_str`.
     pub const ALL: [IrrigationSystem; 4] = [
         IrrigationSystem::Rainfed,
         IrrigationSystem::Gravity,
@@ -135,7 +171,7 @@ impl fmt::Display for IrrigationSystem {
 /// The thermal belt a lot sits in, which is the axis Tabla 4 keys its
 /// organic-matter categories to.
 ///
-/// AGRONOMIC_NOTE: the same 3% organic matter is *high* in the lowlands
+/// `AGRONOMIC_NOTE`: the same 3% organic matter is *high* in the lowlands
 /// and *very low* above 2000 m. Cold slows the mineralization that
 /// consumes soil organic matter, so a highland soil accumulates several
 /// times more of it at equilibrium — reading one figure against the other
@@ -153,6 +189,7 @@ pub enum ClimateZone {
 impl ClimateZone {
     /// Tabla 4's primary key. Preferred over temperature because the
     /// grower knows it without a network call and it does not drift.
+    #[must_use]
     pub fn from_altitude_m(altitude_m: f64) -> Self {
         if altitude_m < 1000.0 {
             ClimateZone::Warm
@@ -165,6 +202,7 @@ impl ClimateZone {
 
     /// Tabla 4's second key, given as equivalent to the first. Used when a
     /// lot has no altitude on file but a climatology was fetched.
+    #[must_use]
     pub fn from_mean_temp_c(mean_temp_c: f64) -> Self {
         if mean_temp_c > 24.0 {
             ClimateZone::Warm
@@ -186,16 +224,21 @@ impl fmt::Display for ClimateZone {
     }
 }
 
-/// A yield goal used to scale crop nutrient removal, e.g. 10.0 t_ha.
+/// A yield goal used to scale crop nutrient removal, e.g. 10.0 `t_ha`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct YieldTarget {
+    /// The goal itself, in [`Self::unit`].
     pub value: f64,
+    /// The unit the goal is stated in. Must match the unit the crop's
+    /// removal coefficients are stated per, or the demand is wrong by
+    /// whatever the two differ by — the use case checks this rather than
+    /// converting.
     pub unit: String,
 }
 
 /// The chemical or commercial form a fertilizer carries its nutrient in.
 ///
-/// AGRONOMIC_NOTE: form decides *when* a nutrient becomes available, which
+/// `AGRONOMIC_NOTE`: form decides *when* a nutrient becomes available, which
 /// is a different question from how much of it a product contains. Two
 /// products at 24% S are not interchangeable if one is sulfate — taken up
 /// on contact — and the other elemental, which soil bacteria have to
@@ -219,8 +262,14 @@ pub enum FertilizerForm {
     /// CO(NH2)2: hydrolyses to ammonium first, so it carries urea's
     /// volatilization risk.
     Amide,
+    /// Cl(-): fully soluble, but the accompanying chloride is what makes
+    /// a muriate unsuitable for chloride-sensitive crops.
     Chloride,
+    /// A metal oxide. Slowly soluble, so availability trails a salt of the
+    /// same element.
     Oxide,
+    /// CO3(2-): the liming forms, which react with soil acidity rather
+    /// than dissolving outright.
     Carbonate,
     /// An organic ligand keeps the cation in solution where an inorganic
     /// salt would precipitate.
@@ -236,6 +285,8 @@ pub enum FertilizerForm {
 }
 
 impl FertilizerForm {
+    /// Every form, so a front-end can offer the closed set and `from_str`
+    /// has one list to match against.
     pub const ALL: [FertilizerForm; 11] = [
         FertilizerForm::Sulfate,
         FertilizerForm::Elemental,
@@ -250,6 +301,12 @@ impl FertilizerForm {
         FertilizerForm::Unknown,
     ];
 
+    /// The form's canonical spelling — the one a CSV column carries and
+    /// the one `from_str` accepts.
+    ///
+    /// # Returns
+    /// A static lowercase identifier, never localised.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             FertilizerForm::Sulfate => "sulfate",
@@ -273,6 +330,7 @@ impl FertilizerForm {
     /// the common case (a soluble salt), and the efficiency path reports
     /// the assumption rather than quietly penalising every row of an
     /// un-migrated catalog.
+    #[must_use]
     pub fn needs_soil_transformation(self) -> bool {
         matches!(self, FertilizerForm::Elemental)
     }
@@ -306,15 +364,21 @@ impl fmt::Display for FertilizerForm {
 /// Qualitative interpretation of a soil test value against critical levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoilStatus {
+    /// Below the low threshold: the nutrient is limiting and a correction
+    /// is warranted.
     Low,
+    /// Between the two thresholds: adequate, and normally planned as
+    /// maintenance.
     Medium,
+    /// At or above the medium threshold: the soil already supplies it, and
+    /// beyond the high threshold an excess may itself be a problem.
     High,
 }
 
 /// Which of the two coefficients the source tables give per crop is used
 /// to size the crop's demand.
 ///
-/// AGRONOMIC_NOTE: these answer different questions and neither is a
+/// `AGRONOMIC_NOTE`: these answer different questions and neither is a
 /// refinement of the other. *Extraction* is what physically leaves the
 /// field in the harvested organ, so it sizes a maintenance plan — replace
 /// what the harvest took. *Absorption* is total uptake by the whole plant
@@ -325,11 +389,16 @@ pub enum SoilStatus {
 /// residue does stay over-fertilizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NutrientDemandMode {
+    /// What physically leaves the field in the harvested organ. Sizes a
+    /// maintenance plan.
     Extraction,
+    /// Total uptake by the whole plant over the cycle, residues included.
+    /// Always the larger figure of the two.
     Absorption,
 }
 
 impl NutrientDemandMode {
+    /// Both bases, so a front-end can offer the choice.
     pub const ALL: [NutrientDemandMode; 2] = [NutrientDemandMode::Extraction, NutrientDemandMode::Absorption];
 }
 

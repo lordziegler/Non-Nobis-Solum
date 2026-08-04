@@ -1,3 +1,11 @@
+//! The closed set of nutrients, and the groupings the tables are written
+//! in.
+//!
+//! One enum rather than strings so that a soil reading, a removal
+//! coefficient and a fertilizer's composition cannot disagree about what
+//! they are describing. Parsing is `FromStr`, so an unknown nutrient is
+//! refused at the edge rather than carried inward as a typo.
+
 use super::errors::DomainError;
 use std::fmt;
 use std::str::FromStr;
@@ -6,17 +14,38 @@ use std::str::FromStr;
 /// fertilizer composition are all keyed by the same closed set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Nutrient {
+    /// Nitrogen. The only macronutrient whose soil supply is *mineralized*
+    /// out of organic matter rather than read directly off the exchange.
     N,
+    /// Phosphorus. Reported and thresholded on the extractant used, and
+    /// fixed by both acid and calcareous soils.
     P,
+    /// Potassium. Exchangeable, and the mobile cation a coarse soil loses.
     K,
+    /// Sulfur. The one macronutrient whose availability turns on the form
+    /// it is applied in — sulfate is immediate, elemental is not.
     S,
+    /// Calcium. A nutrient and a base: it appears in the balance and again
+    /// in the base saturation a liming target is set against.
     Ca,
+    /// Magnesium. Also a base, and the one a purely calcitic liming
+    /// dilutes.
     Mg,
+    /// Iron. Micronutrient; precipitates in calcareous soils, where a
+    /// chelate is the only form that survives.
     Fe,
+    /// Manganese. Micronutrient; availability falls sharply as pH rises.
     Mn,
+    /// Zinc. Micronutrient, and the most commonly deficient one in the
+    /// source literature's region.
     Zn,
+    /// Copper. Micronutrient; held tightly by organic matter.
     Cu,
+    /// Boron. Micronutrient with the narrowest margin between deficiency
+    /// and toxicity of any element here.
     B,
+    /// Molybdenum. Micronutrient needed in the smallest amount, and the
+    /// only one more available as pH rises.
     Mo,
     /// Exchangeable aluminum (Al³⁺), cmolc/kg. Not a plant nutrient — a
     /// soil-acidity indicator, reused via the same soil-test pipeline as
@@ -31,13 +60,16 @@ pub enum Nutrient {
 }
 
 impl Nutrient {
+    /// The six planned by balance: demand at the yield goal, less what the
+    /// soil supplies, divided by an efficiency. Excludes `Al` and `H`,
+    /// which are acidity indicators rather than nutrients.
     pub const MACRONUTRIENTS: [Nutrient; 6] =
         [Nutrient::N, Nutrient::P, Nutrient::K, Nutrient::S, Nutrient::Ca, Nutrient::Mg];
 
     /// Planned on a different basis from the macronutrients, not as a
     /// lesser version of them.
     ///
-    /// AGRONOMIC_NOTE: the source removal tables (Tabla 10/11) report no
+    /// `AGRONOMIC_NOTE`: the source removal tables (Tabla 10/11) report no
     /// micronutrient coefficient for any crop, so there is no "what the
     /// harvest takes" figure to replace — and there would be little point
     /// if there were, since a crop's micronutrient offtake is grams per
@@ -67,6 +99,13 @@ impl Nutrient {
         Nutrient::H,
     ];
 
+    /// The nutrient's chemical symbol — the identifier every reference
+    /// table and CSV column keys on.
+    ///
+    /// # Returns
+    /// A static symbol (`"N"`, `"P2O5"` is *not* one of these — this is
+    /// always the element), which `from_str` accepts back unchanged.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Nutrient::N => "N",

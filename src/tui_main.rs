@@ -1,3 +1,7 @@
+//! `nns-tui`: the terminal front-end. Seeds the curated data directory,
+//! then hands the terminal to `tui_adapter` — the process boundary and
+//! nothing else.
+
 use non_nobis_solum::core::domain::DomainError;
 use non_nobis_solum::infra::bootstrap::CuratedSeed;
 use non_nobis_solum::infra::{bootstrap, tui_adapter};

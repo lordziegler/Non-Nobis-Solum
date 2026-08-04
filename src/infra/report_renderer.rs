@@ -14,6 +14,7 @@ use crate::core::domain::{
 pub const WIDTH: usize = 96;
 
 /// The whole report, in the order the workflow asks for it.
+#[must_use]
 pub fn render(report: &FertilizerRecommendationReport) -> Vec<String> {
     let mut out = Vec::new();
     scenario(report, &mut out);
@@ -32,6 +33,7 @@ pub fn render(report: &FertilizerRecommendationReport) -> Vec<String> {
 
 /// The consolidated table alone, for a front-end with a panel to fill
 /// rather than a page.
+#[must_use]
 pub fn render_summary(report: &FertilizerRecommendationReport) -> Vec<String> {
     let mut out = Vec::new();
     consolidated(report, &mut out);
@@ -135,8 +137,7 @@ fn requirements(report: &FertilizerRecommendationReport, out: &mut Vec<String>) 
             .elemental_requirements
             .iter()
             .find(|(nutrient, _)| *nutrient == requirement.nutrient.elemental())
-            .map(|(_, kg)| *kg)
-            .unwrap_or(requirement.kg_ha);
+            .map_or(requirement.kg_ha, |(_, kg)| *kg);
         out.push(format!(
             "  {:<8} {:>14.2} {:>18.2}  ({})",
             requirement.nutrient.as_str(),
@@ -248,7 +249,7 @@ fn target_ratio(report: &FertilizerRecommendationReport, out: &mut Vec<String>) 
 }
 
 fn optional(value: Option<f64>) -> String {
-    value.map(|v| format!("{v:.3}")).unwrap_or_else(|| "-".to_string())
+    value.map_or_else(|| "-".to_string(), |v| format!("{v:.3}"))
 }
 
 // ---- 4 · candidates ------------------------------------------------------
@@ -311,7 +312,7 @@ fn compound(report: &FertilizerRecommendationReport, out: &mut Vec<String>) {
     out.push(format!("  {:<8} {:>16} {:>16}", "nutrient", "NF (kg/ha)", "dose it needs"));
     for (nutrient, dose) in &composite.dose_per_nutrient {
         let requirement =
-            report.requirements.iter().find(|r| r.nutrient == *nutrient).map(|r| r.kg_ha).unwrap_or(0.0);
+            report.requirements.iter().find(|r| r.nutrient == *nutrient).map_or(0.0, |r| r.kg_ha);
         out.push(format!(
             "  {:<8} {:>16.2} {:>13.2} kg{}",
             nutrient.as_str(),
@@ -452,10 +453,7 @@ fn assumptions(report: &FertilizerRecommendationReport, out: &mut Vec<String>) {
 }
 
 fn truncate(text: &str, width: usize) -> String {
-    match text.chars().count() > width {
-        true => text.chars().take(width.saturating_sub(1)).collect::<String>() + "…",
-        false => text.to_string(),
-    }
+    if text.chars().count() > width { text.chars().take(width.saturating_sub(1)).collect::<String>() + "…" } else { text.to_string() }
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -477,6 +475,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// A one-line digest for a status bar or a log.
+#[must_use]
 pub fn one_line(report: &FertilizerRecommendationReport) -> String {
     let products: Vec<String> = report
         .chosen
@@ -484,9 +483,6 @@ pub fn one_line(report: &FertilizerRecommendationReport) -> String {
         .iter()
         .map(|line| format!("{} {:.0} kg/ha", truncate(&line.source_name, 22), line.kg_per_ha))
         .collect();
-    match products.is_empty() {
-        true => "no product recommended".to_string(),
-        false => products.join(" + "),
-    }
+    if products.is_empty() { "no product recommended".to_string() } else { products.join(" + ") }
 }
 

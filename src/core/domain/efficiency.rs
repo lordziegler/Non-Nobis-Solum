@@ -84,8 +84,13 @@ use super::value_objects::{IrrigationSystem, Texture};
 /// than assuming the site is fine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScenarioConditions {
+    /// Soil reaction. Moves phosphorus in both directions and, below the
+    /// profile's acid threshold, prices aluminium fixation already.
     pub ph: f64,
+    /// Texture class. Drives the leaching penalty on the mobile nutrients.
     pub texture: Texture,
+    /// How the lot is watered. A non-rainfed lot is exempt from the
+    /// water-deficit rules entirely.
     pub irrigation: IrrigationSystem,
     /// Annual mean, °C.
     pub mean_temp_c: Option<f64>,
@@ -103,6 +108,7 @@ impl ScenarioConditions {
     /// The conditions of a site nothing is known to be wrong with: used as
     /// the reference point the band tables are written against, and by the
     /// tests that check a neutral site collects no penalties.
+    #[must_use]
     pub fn reference(texture: Texture, irrigation: IrrigationSystem) -> Self {
         Self {
             ph: 6.5,
@@ -118,7 +124,7 @@ impl ScenarioConditions {
 
 /// Which sulfur carrier the plan will actually apply.
 ///
-/// AGRONOMIC_NOTE: this is the one modifier that depends on the product
+/// `AGRONOMIC_NOTE`: this is the one modifier that depends on the product
 /// rather than the site, and it creates an ordering problem — efficiency
 /// sizes the requirement, and the requirement is what picks the product.
 /// The balance therefore runs on [`SulfurForm::Unstated`], which is treated
@@ -138,6 +144,11 @@ pub enum SulfurForm {
 }
 
 impl SulfurForm {
+    /// The form's name as an efficiency trace prints it.
+    ///
+    /// # Returns
+    /// A static lowercase identifier.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             SulfurForm::Sulfate => "sulfate",
@@ -173,14 +184,23 @@ pub struct EfficiencyModifier {
 /// One nutrient's efficiency, start to finish.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdjustedEfficiency {
+    /// The nutrient this efficiency is for.
     pub nutrient: Nutrient,
     /// Midpoint of the range `efficiency_rules.yaml` gives for this
     /// nutrient and this texture/irrigation class.
     pub base: f64,
+    /// Every site condition that moved the base, in the order they were
+    /// applied. They compound multiplicatively, and the list is what makes
+    /// a number in a report explainable.
     pub modifiers: Vec<EfficiencyModifier>,
     /// The figure the dose actually divides by.
     pub adjusted: f64,
+    /// The lowest `adjusted` may fall to, from the profile's floor table.
+    /// Without it a stack of penalties drives the dose toward infinity.
     pub floor: f64,
+    /// The highest `adjusted` may reach — the top of the base range, so a
+    /// favourable site never claims better recovery than the literature
+    /// measured.
     pub ceiling: f64,
     /// True when the product of the modifiers fell outside the bounds and
     /// the clamp caught it — worth saying, because it means the site is at
@@ -192,11 +212,13 @@ pub struct AdjustedEfficiency {
 
 impl AdjustedEfficiency {
     /// The product of every modifier, i.e. how much of the base survived.
+    #[must_use]
     pub fn retained_fraction(&self) -> f64 {
         self.modifiers.iter().map(|m| m.factor).product()
     }
 
     /// "45% base, x0.85 sandy loam, x0.90 rainfed water deficit -> 34%".
+    #[must_use]
     pub fn summary(&self) -> String {
         let mut text = format!("{:.0}% base", self.base * 100.0);
         for modifier in &self.modifiers {
@@ -217,16 +239,24 @@ impl AdjustedEfficiency {
 /// Which site variable a band reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BandGroup {
+    /// Soil reaction bands.
     Ph,
+    /// Texture-class bands.
     Texture,
+    /// Water balance: rainfall against evapotranspiration, rainfed only.
     Water,
+    /// Annual mean temperature bands.
     TemperatureMean,
+    /// Hottest month's mean daily maximum — the volatilization window.
     TemperatureMax,
+    /// Exchangeable aluminium saturation.
     Acidity,
+    /// The chemical form the chosen product carries the nutrient in.
     SourceForm,
 }
 
 impl BandGroup {
+    /// Every group, so a loader can check the table names nothing else.
     pub const ALL: [BandGroup; 7] = [
         BandGroup::Ph,
         BandGroup::Texture,
@@ -237,6 +267,11 @@ impl BandGroup {
         BandGroup::SourceForm,
     ];
 
+    /// The group's key as `efficiency_bands.toml` spells it.
+    ///
+    /// # Returns
+    /// A static lowercase identifier.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             BandGroup::Ph => "ph",
@@ -264,7 +299,10 @@ impl std::str::FromStr for BandGroup {
 /// One row of `efficiency_bands.toml`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EfficiencyBandRule {
+    /// Which site variable this row reads.
     pub group: BandGroup,
+    /// The nutrient it penalises or favours. A row applies to one nutrient
+    /// only — that is why cold slows N and P without touching K.
     pub nutrient: Nutrient,
     /// Categorical filter — a texture class, `rainfed`/`any`, a product
     /// form. `None` matches anything.
@@ -273,9 +311,15 @@ pub struct EfficiencyBandRule {
     /// convention `soil_quality_thresholds.csv` uses. Both `None` marks the
     /// row that fires when the variable is *unknown*.
     pub min: Option<f64>,
+    /// Exclusive upper bound of the interval; `None` leaves it open-ended.
     pub max: Option<f64>,
+    /// What `adjusted` is multiplied by when this row fires. Below 1.0 is
+    /// a penalty, above it a bonus; the loader refuses anything outside
+    /// the admissible range.
     pub factor: f64,
+    /// The condition in words, as it appears in an efficiency trace.
     pub effect: String,
+    /// The literature this row's factor was taken from.
     pub basis: String,
 }
 
@@ -301,7 +345,11 @@ impl EfficiencyBandRule {
 /// threshold that is logic rather than a band.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EfficiencyBandRules {
+    /// Every band the profile states, in file order.
     pub bands: Vec<EfficiencyBandRule>,
+    /// The lowest efficiency each nutrient may be driven to. A nutrient
+    /// with no entry falls back to the most pessimistic floor in the
+    /// table rather than to zero.
     pub floors: Vec<(Nutrient, f64)>,
     /// Below this pH the `ph` group already charged phosphorus for Al/Fe
     /// phosphate fixation, so `acidity` applies half its penalty.
@@ -351,17 +399,17 @@ impl EfficiencyBandRules {
     /// The lowest efficiency the model will claim for a nutrient. A nutrient
     /// with no floor row falls back to the most pessimistic one in the
     /// table, which is a bound, not a number about that nutrient.
+    #[must_use]
     pub fn floor(&self, nutrient: Nutrient) -> f64 {
         self.floors
             .iter()
-            .find(|(n, _)| *n == nutrient)
-            .map(|(_, floor)| *floor)
-            .unwrap_or_else(|| self.floors.iter().map(|(_, f)| *f).fold(f64::INFINITY, f64::min).min(0.05))
+            .find(|(n, _)| *n == nutrient).map_or_else(|| self.floors.iter().map(|(_, f)| *f).fold(f64::INFINITY, f64::min).min(0.05), |(_, floor)| *floor)
     }
 }
 
 /// The three classes the loss processes actually distinguish. USDA's twelve
 /// classes are more resolution than any of the cited magnitudes support.
+#[must_use]
 pub fn texture_class(texture: Texture) -> &'static str {
     match texture {
         Texture::Sand | Texture::LoamySand | Texture::SandyLoam => "coarse",
@@ -383,6 +431,12 @@ pub fn texture_class(texture: Texture) -> &'static str {
 /// Every modifier comes from `rules`, which the application layer loaded
 /// from the active profile. Nothing here reads a file and nothing here
 /// carries a threshold.
+#[must_use]
+// The length is the rule table: one block per agronomic condition, each
+// reading as the sentence the source literature states. Splitting it into
+// per-condition helpers would hide that this is an exhaustive list, which
+// is the property a reviewer checks it for.
+#[allow(clippy::too_many_lines)]
 pub fn adjust(
     nutrient: Nutrient,
     base: f64,
@@ -899,7 +953,7 @@ mod tests {
         let mut andean = rules();
         andean.floors = vec![(Nutrient::P, 0.03)];
         // ...and the harder fixation band an ash soil justifies.
-        for rule in andean.bands.iter_mut() {
+        for rule in &mut andean.bands {
             if rule.group == BandGroup::Ph && rule.nutrient == Nutrient::P && rule.max == Some(5.0) {
                 rule.factor = 0.62;
             }
